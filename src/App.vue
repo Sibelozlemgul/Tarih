@@ -151,84 +151,88 @@ const handleAuth = async () => {
 
 // Admin Report Logic
 const fetchUserReports = async () => {
-  // Parallel Fetch for Speed
-  const [usersSnapshot, progressSnapshot] = await Promise.all([
-    getDocs(collection(db, 'users')),
-    getDocs(collection(db, 'user_progress'))
-  ])
+  try {
+    isLoadingReport.value = true
+    errorReport.value = null // Reset error
 
-  // A. Process Users
-  const users = usersSnapshot.docs.map(d => ({ uid: d.id, ...d.data(), stats: {} }))
-
-  // B. Process Progress
-  const progressByUserId = {}
-  progressSnapshot.docs.forEach(doc => {
-    const data = doc.data()
-    if (data.status === 'known') {
-        if (!progressByUserId[data.userId]) progressByUserId[data.userId] = []
-        progressByUserId[data.userId].push(data.cardId)
+    // 1. Fetch Users (With Timeout Constraint)
+    // We try to fetch users first to at least show the list
+    const usersPromise = getDocs(collection(db, 'users'))
+    const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout")), 8000))
+    
+    let usersSnapshot
+    try {
+      usersSnapshot = await Promise.race([usersPromise, timeoutPromise])
+    } catch (e) {
+      if (e.message === "Timeout") throw new Error("Kullanıcı listesi yüklenirken zaman aşımı oluştu.")
+      throw e
     }
-  })
 
-  // C. Map to Report Structure
-  userReports.value = users.map(u => {
-    const knownCardIds = progressByUserId[u.uid] || []
-    
-    // Breakdown by Lesson -> Category
-    const breakdown = {}
-    let totalKnown = 0
-    
-    knownCardIds.forEach(cardId => {
-      const card = rawCards.value.find(c => c.id === cardId)
-      if (card) {
-        if (!breakdown[card.lesson]) breakdown[card.lesson] = {}
-        if (!breakdown[card.lesson][card.category]) breakdown[card.lesson][card.category] = 0
+    const users = usersSnapshot.docs.map(d => ({ uid: d.id, ...d.data(), stats: {} }))
+
+    // 2. Fetch Progress (Non-blocking / Background attempt)
+    // We try to fetch progress, but if it fails, we still show users
+    try {
+      const progressPromise = getDocs(collection(db, 'user_progress'))
+      const progressSnapshot = await Promise.race([progressPromise, timeoutPromise])
+      
+      const progressByUserId = {}
+      progressSnapshot.docs.forEach(doc => {
+        const data = doc.data()
+        if (data.status === 'known') {
+            if (!progressByUserId[data.userId]) progressByUserId[data.userId] = []
+            progressByUserId[data.userId].push(data.cardId)
+        }
+      })
+
+      // Merge Progress
+      userReports.value = users.map(u => {
+        const knownCardIds = progressByUserId[u.uid] || []
+        const breakdown = {}
+        let totalKnown = 0
         
-        breakdown[card.lesson][card.category]++
-        totalKnown++
-      }
-    })
+        knownCardIds.forEach(cardId => {
+          const card = rawCards.value.find(c => c.id === cardId)
+          if (card) {
+            if (!breakdown[card.lesson]) breakdown[card.lesson] = {}
+            if (!breakdown[card.lesson][card.category]) breakdown[card.lesson][card.category] = 0
+            breakdown[card.lesson][card.category]++
+            totalKnown++
+          }
+        })
+        return { ...u, totalKnown, breakdown }
+      })
 
-    return {
-      ...u,
-      totalKnown,
-      breakdown
+    } catch (progressError) {
+      console.warn("Progress fetch failed:", progressError)
+      // If progress fails, just show users with 0 progress
+      userReports.value = users.map(u => ({ ...u, totalKnown: 0, breakdown: {} }))
+      // We could set a warning flag here if we wanted
     }
-  })
+
+  } catch (e) {
+    console.error("Report Fetch Error:", e)
+    errorReport.value = e.message
+  } finally {
+    isLoadingReport.value = false
+  }
 }
 
-// Admin Reports Loading
+// Admin Reports State
+const errorReport = ref(null)
 const isLoadingReport = ref(false)
 
 // ... (stats constants)
 
 const toggleReportModal = async () => {
-  // If open, just close it
   if (showReportModal.value) {
     showReportModal.value = false
     return
   }
 
-  // Open and Load
   showReportModal.value = true
-  isLoadingReport.value = true
-
-  try {
-    // 10 Second Timeout Race
-    const timeoutPromise = new Promise((_, reject) => 
-      setTimeout(() => reject(new Error("Sunucudan yanıt alınamadı (Zaman aşımı). İnternet bağlantınızı kontrol edin veya güvenlik ayarları engelliyor olabilir.")), 10000)
-    )
-
-    await Promise.race([
-      fetchUserReports(),
-      timeoutPromise
-    ])
-  } catch (e) {
-    console.error(e)
-    alert("Hata: " + (e.message || "Bilinmeyen bir hata oluştu."))
-  } finally {
-    isLoadingReport.value = false
-  }
+  // Trigger fetch but don't await blocking the UI toggle
+  fetchUserReports()
 }
 
 
@@ -445,7 +449,13 @@ const downloadPDF = async (categoryName = null) => {
         
         <div v-if="isLoadingReport" class="loading-state">
           <div class="spinner"></div>
-          <p>Veriler yükleniyor, lütfen bekleyin...</p>
+          <p>Veriler yükleniyor...</p>
+        </div>
+
+        <div v-else-if="errorReport" class="error-state">
+          <p>⚠️ {{ errorReport }}</p>
+          <small>Firebase Console > Firestore Rules ayarlarını kontrol etmeniz gerekebilir.</small>
+          <button class="btn-secondary full-width" @click="fetchUserReports" style="margin-top: 10px;">Tekrar Dene</button>
         </div>
 
         <div v-else>
@@ -1149,6 +1159,13 @@ const downloadPDF = async (categoryName = null) => {
   text-align: left;
 }
 
+.error-state {
+  text-align: center;
+  padding: 2rem;
+  color: #f87171;
+  background: rgba(255,0,0,0.1);
+  border-radius: 8px;
+}
 .report-list {
   margin: 1.5rem 0;
   display: flex;
