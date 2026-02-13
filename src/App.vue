@@ -1,7 +1,7 @@
 <script setup>
 import { ref, computed, onMounted, watch } from 'vue'
 import { db, auth } from './firebase'
-import { collection, addDoc, onSnapshot, doc, updateDoc, deleteDoc, query, orderBy, setDoc, where, getDocs, getDoc } from 'firebase/firestore'
+import { collection, addDoc, onSnapshot, doc, updateDoc, deleteDoc, query, orderBy, setDoc, where, getDocs, getDoc, getDocsFromServer } from 'firebase/firestore'
 import { onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, updateProfile } from 'firebase/auth'
 import CardForm from './components/CardForm.vue'
 import StudyMode from './components/StudyMode.vue'
@@ -24,6 +24,7 @@ const email = ref('')
 const password = ref('')
 const fullName = ref('')
 const cachedName = ref(localStorage.getItem('userName') || '')
+const isInitialAuthCheck = ref(true) // Prevent login flash on refresh
 
 // Admin Reports
 const showReportModal = ref(false)
@@ -63,17 +64,20 @@ onMounted(() => {
     user.value = currentUser
     
     // Check Admin
-    if (currentUser && currentUser.email === 'sibelozlemgul811@gmail.com') {
+    if (currentUser && currentUser.email === 'yonetici@gmail.com') {
       isAdmin.value = true
     } else {
       isAdmin.value = false
     }
 
     if (currentUser) {
-      // Sync cached name
+      // Sync cached name - Prefer user.displayName, fallback to local storage
       if (currentUser.displayName) {
         cachedName.value = currentUser.displayName
         localStorage.setItem('userName', currentUser.displayName)
+      } else {
+        // Fallback: If displayName is missing (e.g. right after simple login), try cache
+        currentUser.displayName = localStorage.getItem('userName') || ''
       }
       
       // AUTO-MIGRATE: Ensure user exists in 'users' collection (for old accounts)
@@ -102,12 +106,10 @@ onMounted(() => {
         })
         userProgress.value = progressMap
       })
-    } else {
-      if (progressUnsub) progressUnsub()
-      userProgress.value = {} // Reset progress on logout
       cachedName.value = ''
       localStorage.removeItem('userName')
     }
+    isInitialAuthCheck.value = false // Check complete
   })
 })
 
@@ -127,8 +129,10 @@ const handleAuth = async () => {
         createdAt: Date.now()
       })
 
-      // FORCE UPDATE LOCAL USER STATE
-      user.value = { ...userCredential.user, displayName: fullName.value }
+      // 5. FORCE UPDATE LOCAL USER STATE IMMEDIATELY
+      // Firebase auth state change takes a moment, so we manually set it for instant UI feedback
+      const newUser = { ...userCredential.user, displayName: fullName.value }
+      user.value = newUser
       cachedName.value = fullName.value
       localStorage.setItem('userName', fullName.value)
       
@@ -152,12 +156,13 @@ const handleAuth = async () => {
 // Admin Report Logic
 const fetchUserReports = async () => {
   try {
-    isLoadingReport.value = true
-    errorReport.value = null // Reset error
+    isLoadingReport.value = true // Start loading immediately
+    userReports.value = [] // Reset previous list
+    expandedUser.value = null // Reset selection
 
     // 1. Fetch Users (With Timeout Constraint)
     // We try to fetch users first to at least show the list
-    const usersPromise = getDocs(collection(db, 'users'))
+    const usersPromise = getDocsFromServer(collection(db, 'users'))
     const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout")), 8000))
     
     let usersSnapshot
@@ -173,7 +178,7 @@ const fetchUserReports = async () => {
     // 2. Fetch Progress (Non-blocking / Background attempt)
     // We try to fetch progress, but if it fails, we still show users
     try {
-      const progressPromise = getDocs(collection(db, 'user_progress'))
+      const progressPromise = getDocsFromServer(collection(db, 'user_progress'))
       const progressSnapshot = await Promise.race([progressPromise, timeoutPromise])
       
       const progressByUserId = {}
@@ -186,7 +191,7 @@ const fetchUserReports = async () => {
       })
 
       // Merge Progress
-      userReports.value = users.map(u => {
+      const allUsers = users.map(u => {
         const knownCardIds = progressByUserId[u.uid] || []
         const breakdown = {}
         let totalKnown = 0
@@ -202,6 +207,10 @@ const fetchUserReports = async () => {
         })
         return { ...u, totalKnown, breakdown }
       })
+
+      // Filter out Admin accounts (only hide fixed admin emails)
+      const adminEmails = ['yonetici@gmail.com', 'sibelozlemgul811@gmail.com']
+      userReports.value = allUsers.filter(u => !adminEmails.includes(u.email))
 
     } catch (progressError) {
       console.warn("Progress fetch failed:", progressError)
@@ -390,8 +399,9 @@ const downloadPDF = async (categoryName = null) => {
       margin:       10,
       filename:     filename,
       image:        { type: 'jpeg', quality: 0.98 },
-      html2canvas:  { scale: 2 },
-      jsPDF:        { unit: 'mm', format: 'a4', orientation: 'portrait' }
+      html2canvas:  { scale: 2, useCORS: true, logging: false },
+      jsPDF:        { unit: 'mm', format: 'a4', orientation: 'portrait' },
+      pagebreak:    { mode: ['avoid-all', 'css', 'legacy'] }
     }
 
     await html2pdf().set(opt).from(element).save()
@@ -404,10 +414,16 @@ const downloadPDF = async (categoryName = null) => {
   }
 }
 </script>
-
 <template>
-  <!-- AUTH SCREEN (If not logged in) -->
-  <div v-if="!user" class="auth-wrapper">
+  <!-- INITIAL AUTH CHECK LOADING SCREEN -->
+  <div v-if="isInitialAuthCheck" class="auth-wrapper">
+    <div class="spinner"></div>
+    <p style="margin-top: 1rem; color: white; opacity: 0.7;">Oturum kontrol ediliyor...</p>
+  </div>
+
+  <template v-else>
+    <!-- AUTH SCREEN (If not logged in) -->
+    <div v-if="!user" class="auth-wrapper">
     <div class="auth-box glassy">
       <div class="logo-large">🧠 KPSS Kartları</div>
       
@@ -437,15 +453,15 @@ const downloadPDF = async (categoryName = null) => {
         {{ selectedLesson ? selectedLesson : '🧠 KPSS Kartları' }}
       </div>
       <div class="auth-controls">
-        <button @click="toggleReportModal" class="btn-sm btn-report">👥 Kullanıcılar</button>
         <span class="user-email">{{ user.displayName || cachedName || user.email }}</span>
+        <button @click="toggleReportModal" class="btn-sm btn-report">Kullanıcılar</button>
         <button @click="handleLogout" class="btn-sm btn-logout">Çıkış</button>
       </div>
     </nav>
     <!-- USERS REPORT MODAL -->
     <div v-if="showReportModal" class="modal-overlay" @click.self="showReportModal = false">
       <div class="modal glassy report-modal">
-        <h3>👥 Öğrenci İlerleme Raporu</h3>
+        <h3>📊Öğrenci İlerleme Raporu</h3>
         
         <div v-if="isLoadingReport" class="loading-state">
           <div class="spinner"></div>
@@ -493,7 +509,9 @@ const downloadPDF = async (categoryName = null) => {
           </div>
         </div>
 
-        <button class="btn-secondary full-width" @click="showReportModal = false">Kapat</button>
+        <div class="modal-footer">
+          <button class="btn-secondary btn-close-modal" @click="showReportModal = false">Kapat</button>
+        </div>
       </div>
     </div>
 
@@ -618,6 +636,7 @@ const downloadPDF = async (categoryName = null) => {
       </div>
     </div>
   </div>
+  </template>
 </template>
 
 <style scoped>
@@ -889,6 +908,8 @@ const downloadPDF = async (categoryName = null) => {
   background: white;
   color: black;
   padding: 20px;
+  width: 190mm; /* Standard A4 width minus margins */
+  margin: 0 auto;
 }
 
 .print-container h1 { 
@@ -901,6 +922,7 @@ const downloadPDF = async (categoryName = null) => {
 
 .print-category {
   margin-bottom: 2rem;
+  break-inside: avoid;
   page-break-inside: avoid;
 }
 
@@ -913,8 +935,8 @@ const downloadPDF = async (categoryName = null) => {
 }
 
 .print-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
+  display: flex;
+  flex-wrap: wrap;
   gap: 15px;
 }
 
@@ -923,6 +945,8 @@ const downloadPDF = async (categoryName = null) => {
   border-radius: 8px;
   padding: 15px;
   background: #f9f9f9;
+  width: calc(50% - 8px); /* Two columns layout using flex */
+  break-inside: avoid;
   page-break-inside: avoid;
 }
 
@@ -942,16 +966,18 @@ const downloadPDF = async (categoryName = null) => {
 /* NAVBAR LAYOUT */
 .nav-bar {
   display: flex;
-  justify-content: space-between;
+  flex-direction: column;
+  justify-content: center;
   align-items: center;
-  padding: 1rem 2rem;
+  padding: 1.5rem;
   margin-bottom: 2rem;
   position: relative;
-  z-index: 100; /* Ensure it stays on top */
+  z-index: 100;
+  gap: 1rem;
 }
 
 .logo {
-  font-size: 1.5rem;
+  font-size: 1.6rem;
   font-weight: bold;
   display: flex;
   align-items: center;
@@ -961,19 +987,26 @@ const downloadPDF = async (categoryName = null) => {
 .auth-controls {
   display: flex;
   align-items: center;
-  gap: 15px;
+  justify-content: center;
+  gap: 10px;
+  flex-wrap: wrap;
 }
 
 .user-email {
-  font-size: 0.95rem;
+  font-size: 0.85rem;
   color: rgba(255,255,255,0.9);
   font-weight: 500;
-  display: none; /* Hide email on very small screens if needed, or keep */
+  max-width: 120px; /* Limit width on mobile */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: inline-block;
 }
 
 @media (min-width: 600px) {
   .user-email {
-    display: inline-block;
+    font-size: 0.95rem;
+    max-width: none;
   }
 }
 
@@ -1065,9 +1098,9 @@ const downloadPDF = async (categoryName = null) => {
 }
 
 .auth-box {
-  width: 90%;
+  width: 95%;
   max-width: 400px;
-  padding: 3rem 2rem;
+  padding: 2.5rem 1.5rem;
   border-radius: 20px;
   text-align: center;
   box-shadow: 0 20px 40px rgba(0,0,0,0.4);
@@ -1093,6 +1126,8 @@ const downloadPDF = async (categoryName = null) => {
   background: rgba(255,255,255,0.05);
   color: white;
   font-size: 1rem;
+  box-sizing: border-box;
+  text-align: left;
 }
 
 .full-width {
@@ -1155,8 +1190,22 @@ const downloadPDF = async (categoryName = null) => {
   width: 90%;
   max-width: 500px;
   max-height: 80vh;
+  min-height: 300px; /* Prevent shrinking during load */
   overflow-y: auto;
   text-align: left;
+}
+
+.modal-footer {
+  display: flex;
+  justify-content: center;
+  margin-top: 1.5rem;
+  padding-top: 1rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.btn-close-modal {
+  width: 100% !important;
+  margin-top: 0.5rem;
 }
 
 .error-state {
