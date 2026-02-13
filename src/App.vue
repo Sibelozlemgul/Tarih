@@ -2,7 +2,7 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import { db, auth } from './firebase'
 import { collection, addDoc, onSnapshot, doc, updateDoc, deleteDoc, query, orderBy, setDoc, where } from 'firebase/firestore'
-import { onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut } from 'firebase/auth'
+import { onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, updateProfile } from 'firebase/auth'
 import CardForm from './components/CardForm.vue'
 import StudyMode from './components/StudyMode.vue'
 
@@ -22,6 +22,7 @@ const showLogin = ref(false)
 const isRegisterMode = ref(false)
 const email = ref('')
 const password = ref('')
+const fullName = ref('')
 
 // Constants
 const lessons = [
@@ -83,16 +84,25 @@ onMounted(() => {
 const handleAuth = async () => {
   try {
     if (isRegisterMode.value) {
-      await createUserWithEmailAndPassword(auth, email.value, password.value)
-      alert("Kayıt başarılı! Hoşgeldiniz.")
+      const userCredential = await createUserWithEmailAndPassword(auth, email.value, password.value)
+      // Save Full Name
+      await updateProfile(userCredential.user, {
+        displayName: fullName.value
+      })
+      alert("Kayıt başarılı! Hoşgeldiniz, " + fullName.value)
     } else {
       await signInWithEmailAndPassword(auth, email.value, password.value)
     }
     showLogin.value = false
     email.value = ''
     password.value = ''
+    fullName.value = ''
   } catch (error) {
-    alert('İşlem başarısız: ' + error.message)
+    if (error.code === 'auth/email-already-in-use') {
+      alert('Bu e-posta adresi zaten kullanımda. Lütfen "Giriş Yap" seçeneğini kullanın.')
+    } else {
+      alert('İşlem başarısız: ' + error.message)
+    }
   }
 }
 
@@ -274,6 +284,7 @@ const downloadPDF = async (categoryName = null) => {
       <h3>{{ isRegisterMode ? 'Yeni Hesap Oluştur' : 'Giriş Yap' }}</h3>
       
       <form @submit.prevent="handleAuth">
+        <input v-if="isRegisterMode" v-model="fullName" type="text" placeholder="Ad Soyad" required class="input-field" />
         <input v-model="email" type="email" placeholder="E-posta" required />
         <input v-model="password" type="password" placeholder="Şifre" required />
         
@@ -296,8 +307,8 @@ const downloadPDF = async (categoryName = null) => {
         {{ selectedLesson ? selectedLesson : '🧠 KPSS Kartları' }}
       </div>
       <div class="auth-controls">
-        <span class="user-email">{{ user.email }}</span>
-        <span @click="handleLogout" class="icon-btn logout-icon" title="Çıkış Yap">🚪</span>
+        <span class="user-email">{{ user.displayName || user.email }}</span>
+        <button @click="handleLogout" class="btn-sm btn-logout">Çıkış Yap</button>
       </div>
     </nav>
     <!-- REMOVED OLD MODAL -->
@@ -884,5 +895,21 @@ const downloadPDF = async (categoryName = null) => {
 
 .logout-icon {
   display: inline-block;
+}
+
+.btn-logout {
+  background: rgba(239, 68, 68, 0.2);
+  color: #f87171;
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  padding: 0.5rem 1rem;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 0.9rem;
+  transition: all 0.3s ease;
+}
+
+.btn-logout:hover {
+  background: rgba(239, 68, 68, 0.4);
+  color: white;
 }
 </style>
