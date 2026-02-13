@@ -1,7 +1,8 @@
 <script setup>
 import { ref, computed, onMounted, watch } from 'vue'
-import { db } from './firebase'
+import { db, auth } from './firebase'
 import { collection, addDoc, onSnapshot, doc, updateDoc, deleteDoc, query, orderBy } from 'firebase/firestore'
+import { onAuthStateChanged, signInWithEmailAndPassword, signOut } from 'firebase/auth'
 import CardForm from './components/CardForm.vue'
 import StudyMode from './components/StudyMode.vue'
 
@@ -11,6 +12,11 @@ const sessionCards = ref([])
 const selectedCategory = ref(null) // null means all
 const printCategory = ref(null) // for PDF generation
 const selectedLesson = ref(null) // 'Tarih', 'Coğrafya', 'Vatandaşlık' or null
+
+const isAdmin = ref(false)
+const showLogin = ref(false)
+const email = ref('')
+const password = ref('')
 
 const lessons = [
   { id: 'Tarih', emoji: '📜', colors: ['rgba(245, 158, 11, 0.2)', 'rgba(234, 88, 12, 0.2)'] },
@@ -28,11 +34,35 @@ onMounted(() => {
       ...doc.data()
     }))
   })
+
+  // Auth Listener
+  onAuthStateChanged(auth, (user) => {
+    if (user) {
+      isAdmin.value = true
+    } else {
+      isAdmin.value = false
+    }
+  })
 })
 
-// No local storage watch anymore
+const handleLogin = async () => {
+  try {
+    await signInWithEmailAndPassword(auth, email.value, password.value)
+    showLogin.value = false
+    email.value = ''
+    password.value = ''
+  } catch (error) {
+    alert('Giriş başarısız: ' + error.message)
+  }
+}
+
+const handleLogout = async () => {
+  await signOut(auth)
+}
 
 const addCard = async (card) => {
+  if (!isAdmin.value) return 
+  
   // We ignore the local ID and let Firestore generate one
   const { id, ...cardData } = card
   
@@ -102,7 +132,9 @@ const startStudy = (category = null, reviewMode = false) => {
 }
 
 const deleteCategory = async (category) => {
-  if (confirm(`"${category}" setini ve içindeki TÜM kartları silmek istediğine emin misin?`)) {
+  if (!isAdmin.value) return
+
+  if (confirm(`"${category}" setini ve içindeki TÜM kartları silmek istediğine emin misin? (YÖNETİCİ İŞLEMİ)`)) {
     const cardsToDelete = cards.value.filter(c => c.category === category && c.lesson === selectedLesson.value)
     
     // Deleting one by one (Firestore doesn't support delete collection from client)
@@ -179,7 +211,24 @@ const downloadPDF = async (categoryName = null) => {
         <span v-if="selectedLesson" class="back-arrow" @click="goHome">←</span>
         {{ selectedLesson ? selectedLesson : '🧠 KPSS Kartları' }}
       </div>
+      <div class="auth-controls">
+        <span v-if="!isAdmin" @click="showLogin = true" class="icon-btn lock-icon">🔒</span>
+        <span v-else @click="handleLogout" class="icon-btn unlock-icon" title="Çıkış Yap">🔓</span>
+      </div>
     </nav>
+
+    <!-- LOGIN MODAL -->
+    <div v-if="showLogin" class="modal-overlay" @click.self="showLogin = false">
+      <div class="modal glassy">
+        <h3>Yönetici Girişi</h3>
+        <input v-model="email" type="email" placeholder="E-posta" />
+        <input v-model="password" type="password" placeholder="Şifre" @keyup.enter="handleLogin" />
+        <div class="modal-actions">
+          <button class="btn-secondary" @click="showLogin = false">İptal</button>
+          <button class="btn-primary" @click="handleLogin">Giriş Yap</button>
+        </div>
+      </div>
+    </div>
 
     <main class="main-content">
       <transition name="fade" mode="out-in">
@@ -229,6 +278,7 @@ const downloadPDF = async (categoryName = null) => {
               </button>
               
                <button 
+                v-if="isAdmin"
                 class="btn-delete" 
                 @click.stop="deleteCategory(cat)"
                 title="Seti Sil"
@@ -254,7 +304,7 @@ const downloadPDF = async (categoryName = null) => {
             <button v-if="Object.keys(categories).length > 0" class="btn-secondary" @click="downloadPDF(null)">
               💾 Tümünü İndir
             </button>
-            <button class="btn-primary" @click="mode = 'create'">+ Yeni Kart Ekle</button>
+            <button v-if="isAdmin" class="btn-primary" @click="mode = 'create'">+ Yeni Kart Ekle</button>
           </div>
         </div>
 
@@ -620,5 +670,78 @@ const downloadPDF = async (categoryName = null) => {
   font-style: italic; 
   color: #444; 
   font-size: 14px;
+}
+
+/* AUTH CONTROLS */
+.auth-controls {
+  position: absolute;
+  right: 2rem;
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+.icon-btn {
+  font-size: 1.5rem;
+  cursor: pointer;
+  transition: transform 0.2s;
+  display: block;
+}
+
+.icon-btn:hover {
+  transform: scale(1.2);
+}
+
+/* MODAL */
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(0,0,0,0.7);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 1000;
+  backdrop-filter: blur(5px);
+}
+
+.modal {
+  background: #1a1a2e;
+  padding: 2rem;
+  border-radius: 12px;
+  width: 90%;
+  max-width: 400px;
+  text-align: center;
+  border: 1px solid rgba(255,255,255,0.1);
+  box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+}
+
+.modal h3 {
+  margin-top: 0;
+  margin-bottom: 1.5rem;
+  color: white;
+}
+
+.modal input {
+  display: block;
+  width: 100%;
+  margin-bottom: 1rem;
+  padding: 0.8rem;
+  border-radius: 8px;
+  border: 1px solid rgba(255,255,255,0.2);
+  background: rgba(0,0,0,0.3);
+  color: white;
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-top: 1rem;
+}
+
+.modal-actions button {
+  flex: 1;
 }
 </style>
