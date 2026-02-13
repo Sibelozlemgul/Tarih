@@ -6,10 +6,14 @@ const props = defineProps({
   cards: {
     type: Array,
     required: true
+  },
+  isAdmin: {
+    type: Boolean,
+    default: false
   }
 })
 
-const emit = defineEmits(['update-status'])
+const emit = defineEmits(['update-status', 'edit-card', 'delete-card'])
 
 const currentIndex = ref(0)
 const isFlipped = ref(false)
@@ -53,7 +57,9 @@ const nextCard = () => {
     }, 300) // Wait for flip back
   } else {
     // Session finished
-    alert('Tebrikler! Bu oturumu tamamladın.')
+    if (!props.isAdmin) {
+      alert('Tebrikler! Bu oturumu tamamladın.')
+    }
     currentIndex.value = 0
   }
 }
@@ -64,24 +70,34 @@ const nextCard = () => {
     <div v-if="cards.length > 0">
       <div class="header">
         <span class="count">Kart {{ currentIndex + 1 }} / {{ cards.length }}</span>
-        <div class="progress-bar">
-          <div class="progress" :style="{ width: progress + '%' }"></div>
+      </div>
+
+      <div class="card-wrapper">
+        <FlashCard 
+          :card="currentCard" 
+          :is-flipped="isFlipped" 
+          @click="flipCard"
+        />
+        <div v-if="isAdmin" class="admin-card-controls">
+          <button class="btn-sm btn-edit" @click.stop="$emit('edit-card', currentCard)">✏️ Düzenle</button>
+          <button class="btn-sm btn-delete" @click.stop="$emit('delete-card', currentCard)">🗑️ Sil</button>
         </div>
       </div>
 
-      <FlashCard 
-        :card="currentCard" 
-        :is-flipped="isFlipped" 
-        @click="flipCard"
-      />
-
       <div class="controls" v-if="showResultButtons">
-        <button class="btn-danger" @click.stop="handleResult('unknown')">
-          Bilmiyorum
-        </button>
-        <button class="btn-success" @click.stop="handleResult('known')">
-          Biliyorum
-        </button>
+        <template v-if="isAdmin">
+          <button class="btn-primary" @click.stop="nextCard">
+            Sonraki Kart →
+          </button>
+        </template>
+        <template v-else>
+          <button class="btn-danger" @click.stop="handleResult('unknown')">
+            Bilmiyorum
+          </button>
+          <button class="btn-success" @click.stop="handleResult('known')">
+            Biliyorum
+          </button>
+        </template>
       </div>
       <div class="controls" v-else>
         <p class="hint">Cevabı görmek için karta tıkla</p>
@@ -116,26 +132,39 @@ const nextCard = () => {
   display: block;
 }
 
-.progress-bar {
-  width: 100%;
-  height: 6px;
-  background: rgba(255, 255, 255, 0.1);
-  border-radius: 3px;
-  overflow: hidden;
-}
-
-.progress {
-  height: 100%;
-  background: var(--success);
-  transition: width 0.3s ease;
-}
-
 .controls {
   display: flex;
   gap: 1.5rem;
   min-height: 60px;
   align-items: center;
   justify-content: center;
+}
+
+.card-wrapper {
+  position: relative;
+  width: 100%;
+}
+
+.admin-card-controls {
+  margin-top: 1rem;
+  display: flex;
+  justify-content: center;
+  gap: 1rem;
+}
+
+.btn-sm {
+  padding: 0.5rem 1rem;
+  font-size: 0.8rem;
+}
+
+.btn-edit {
+  background: var(--primary);
+  color: white;
+}
+
+.btn-delete {
+  background: var(--danger);
+  color: white;
 }
 
 .hint {

@@ -5,15 +5,19 @@ const props = defineProps({
   initialLesson: {
     type: String,
     default: ''
+  },
+  editingCard: {
+    type: Object,
+    default: null
   }
 })
 
-const emit = defineEmits(['add-card'])
+const emit = defineEmits(['add-card', 'update-card'])
 
-const question = ref('')
-const answer = ref('')
-const category = ref('')
-const lesson = ref(props.initialLesson || '')
+const question = ref(props.editingCard?.question || '')
+const answer = ref(props.editingCard?.answer || '')
+const category = ref(props.editingCard?.category || '')
+const lesson = ref(props.editingCard?.lesson || props.initialLesson || '')
 
 const lessons = ['Tarih', 'Coğrafya', 'Vatandaşlık']
 
@@ -23,33 +27,44 @@ const submitCard = () => {
     return
   }
 
-  const newCard = {
-    id: Date.now(),
-    lesson: lesson.value,
-    category: category.value || 'Genel',
-    question: question.value,
-    answer: answer.value,
-    status: 'unknown',
-    timestamp: Date.now(),
-    lastReviewed: null
+  if (props.editingCard) {
+    const updatedCard = {
+      ...props.editingCard,
+      lesson: lesson.value,
+      category: category.value || 'Genel',
+      question: question.value,
+      answer: answer.value
+    }
+    emit('update-card', updatedCard)
+  } else {
+    const newCard = {
+      id: Date.now(),
+      lesson: lesson.value,
+      category: category.value || 'Genel',
+      question: question.value,
+      answer: answer.value,
+      status: 'unknown',
+      timestamp: Date.now(),
+      lastReviewed: null
+    }
+    emit('add-card', newCard)
   }
 
-  emit('add-card', newCard)
-
-  // Reset fields
-  question.value = ''
-  answer.value = ''
-  // Keep lesson and category for faster entry of same topic
+  // Reset fields only if adding
+  if (!props.editingCard) {
+    question.value = ''
+    answer.value = ''
+  }
 }
 </script>
 
 <template>
   <div class="card-form glassy">
-    <h3>Yeni Kart Ekle</h3>
+    <h3>{{ props.editingCard ? 'Kartı Düzenle' : 'Yeni Kart Ekle' }}</h3>
     
     <div class="form-group">
       <label>Ders *</label>
-      <select v-model="lesson" :disabled="!!props.initialLesson">
+      <select v-model="lesson" :disabled="!!props.initialLesson && !props.editingCard">
         <option disabled value="">Ders Seçiniz</option>
         <option v-for="l in lessons" :key="l" :value="l">{{ l }}</option>
       </select>
@@ -84,7 +99,9 @@ const submitCard = () => {
       ></textarea>
     </div>
 
-    <button class="btn-primary" @click="submitCard">Kartı Ekle</button>
+    <button class="btn-primary" @click="submitCard">
+      {{ props.editingCard ? 'Değişiklikleri Kaydet' : 'Kartı Ekle' }}
+    </button>
   </div>
 </template>
 

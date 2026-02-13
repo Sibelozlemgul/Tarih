@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, watch, nextTick } from 'vue'
 import { db, auth } from './firebase'
 import { collection, addDoc, onSnapshot, doc, updateDoc, deleteDoc, query, orderBy, setDoc, where, getDocs, getDoc, getDocsFromServer } from 'firebase/firestore'
 import { onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, updateProfile } from 'firebase/auth'
@@ -9,12 +9,14 @@ import StudyMode from './components/StudyMode.vue'
 // Data
 const rawCards = ref([]) // Master content from 'flashcards' collection
 const userProgress = ref({}) // Map: cardId -> status ('known' | 'unknown')
-const mode = ref('dashboard') // 'dashboard' | 'create' | 'study'
+const mode = ref('dashboard')
 const sessionCards = ref([])
+const listCards = ref([]) // Cards shown in admin list view
 const selectedCategory = ref(null) // null means all
 const printCategory = ref(null) // for PDF generation
 const selectedLesson = ref(null) // 'Tarih', 'Coğrafya', 'Vatandaşlık' or null
 const isPrinting = ref(false)
+const editingCard = ref(null) // State for card being edited
 
 // Auth State
 const user = ref(null)
@@ -25,7 +27,7 @@ const email = ref('')
 const password = ref('')
 const fullName = ref('')
 const cachedName = ref(localStorage.getItem('userName') || '')
-const isInitialAuthCheck = ref(true) // Prevent login flash on refresh
+const isInitialAuthCheck = ref(true) // Set to true to prevent login screen flash before auth check
 
 // Admin Reports
 const showReportModal = ref(false)
@@ -65,7 +67,8 @@ onMounted(() => {
     user.value = currentUser
     
     // Check Admin
-    if (currentUser && currentUser.email === 'yonetici@gmail.com') {
+    const adminEmails = ['yonetici@gmail.com', 'sibelozlemgul811@gmail.com']
+    if (currentUser && adminEmails.includes(currentUser.email)) {
       isAdmin.value = true
     } else {
       isAdmin.value = false
@@ -112,6 +115,23 @@ onMounted(() => {
     }
     isInitialAuthCheck.value = false // Check complete
   })
+
+  // Restore last session state
+  const savedLesson = localStorage.getItem('lastLesson')
+  const savedCategory = localStorage.getItem('lastCategory')
+  if (savedLesson) selectedLesson.value = savedLesson
+  if (savedCategory) selectedCategory.value = savedCategory
+})
+
+// Watchers for persistence
+watch(selectedLesson, (newVal) => {
+  if (newVal) localStorage.setItem('lastLesson', newVal)
+  else localStorage.removeItem('lastLesson')
+})
+
+watch(selectedCategory, (newVal) => {
+  if (newVal) localStorage.setItem('lastCategory', newVal)
+  else localStorage.removeItem('lastCategory')
 })
 
 const handleAuth = async () => {
@@ -266,6 +286,51 @@ const addCard = async (card) => {
   }
 }
 
+const deleteSingleCard = async (card) => {
+  if (!isAdmin.value) return
+  try {
+    await deleteDoc(doc(db, 'flashcards', card.id))
+    // Handle listCards or sessionCards update
+    listCards.value = listCards.value.filter(c => c.id !== card.id)
+    sessionCards.value = sessionCards.value.filter(c => c.id !== card.id)
+    // alert("Kart silindi.") // Optional: also removed alert for smoother UX if needed, but only "confirm" was explicitly requested to be removed
+  } catch (e) {
+    console.error("Error deleting card: ", e)
+    alert("Kart silinirken bir hata oluştu.")
+  }
+}
+
+const updateCard = async (card) => {
+  if (!isAdmin.value) return 
+  
+  try {
+    const cardRef = doc(db, 'flashcards', card.id)
+    const { id, ...cardData } = card
+    await updateDoc(cardRef, cardData)
+    editingCard.value = null
+    mode.value = 'dashboard'
+    // alert("Kart başarıyla güncellendi.") // Removed for smoother UX
+  } catch (e) {
+    console.error("Error updating card: ", e)
+    alert("Kart güncellenirken bir hata oluştu.")
+  }
+}
+
+const forceRefreshData = async () => {
+  if (!isAdmin.value) return
+  try {
+    const q = query(collection(db, 'flashcards'), orderBy('timestamp', 'desc'))
+    const snapshot = await getDocsFromServer(q)
+    rawCards.value = snapshot.docs.map(doc => ({
+      id: doc.id,
+      ...doc.data()
+    }))
+    alert('Veriler sunucudan başarıyla tazelendi!')
+  } catch (e) {
+    alert('Hata: ' + e.message)
+  }
+}
+
 const updateCardStatus = async ({ card, status }) => {
   if (!user.value) {
     alert("İlerlemenizi kaydetmek için giriş yapmalısınız.")
@@ -303,6 +368,10 @@ const goHome = () => {
 }
 
 const startStudy = (category = null, reviewMode = false) => {
+  if (isAdmin.value) {
+    startList(category)
+    return
+  }
   if (!user.value && !isAdmin.value) {
     // Optional: Force login to study? Or allow guest study without saving?
     // User requested "saving per user", so let's warn.
@@ -359,6 +428,16 @@ const deleteCategory = async (category) => {
   }
 }
 
+const startList = (category = null) => {
+  selectedCategory.value = category
+  let pool = cards.value.filter(c => c.lesson === selectedLesson.value)
+  if (category) {
+    pool = pool.filter(c => c.category === category)
+  }
+  listCards.value = pool.sort((a, b) => b.timestamp - a.timestamp)
+  mode.value = 'list'
+}
+
 const categories = computed(() => {
   if (!selectedLesson.value) return {}
   
@@ -379,51 +458,91 @@ const categories = computed(() => {
 })
 
 const downloadPDF = async (categoryName = null) => {
-  printCategory.value = categoryName
-  isPrinting.value = true
-  
-  // Wait for Vue to render the print container
-  await new Promise(r => setTimeout(r, 500))
-
-  const element = document.querySelector('.print-container')
-  if (!element) return
+  const originalText = categoryName ? `"${categoryName}" indiriliyor...` : "Tüm kartlar indiriliyor..."
   
   try {
-    const html2pdf = (await import('html2pdf.js')).default
-    
-    let filename = categoryName 
-      ? `${selectedLesson.value}_${categoryName}.pdf`
-      : `${selectedLesson.value}_Tum_Kartlar.pdf`
+    const cardsToPrint = cards.value.filter(c => 
+      c.lesson === selectedLesson.value && 
+      (!categoryName || (c.category || 'Genel') === categoryName)
+    )
 
-    const opt = {
-      margin:       10,
-      filename:     filename,
-      image:        { type: 'jpeg', quality: 0.98 },
-      html2canvas:  { scale: 2, useCORS: true, logging: false, letterRendering: true },
-      jsPDF:        { unit: 'mm', format: 'a4', orientation: 'portrait' },
-      pagebreak:    { mode: 'css' }
+    if (cardsToPrint.length === 0) {
+      alert('Yazdırılacak kart bulunamadı.')
+      return
     }
 
-    await html2pdf().set(opt).from(element).save()
+    // build a simple loading notification (optional but helpful)
+    console.log(originalText)
+
+    const html2pdf = (await import('html2pdf.js')).default
+
+    // Building a completely isolated HTML string for the PDF
+    // This bypasses any Vue styling or visibility issues
+    let htmlContent = `
+      <div style="font-family: 'Segoe UI', Arial, sans-serif; padding: 20px; background-color: white; color: black;">
+        <h1 style="text-align: center; border-bottom: 2px solid #000; padding-bottom: 15px; margin-bottom: 30px; color: black;">
+          ${selectedLesson.value} - ${categoryName || 'Tüm Konular'}
+        </h1>
+        <div style="width: 100%;">
+    `
+
+    cardsToPrint.forEach(card => {
+      htmlContent += `
+        <div style="
+          border: 1px solid #444;
+          border-radius: 6px;
+          padding: 8px 12px;
+          margin-bottom: 8px;
+          page-break-inside: avoid !important;
+          break-inside: avoid !important;
+          background-color: white;
+          color: black;
+          display: block;
+          box-sizing: border-box;
+          font-size: 14px;
+        ">
+          <div style="margin-bottom: 4px; color: black; line-height: 1.2;">
+            <b style="color: black;">S:</b> <span>${card.question}</span>
+          </div>
+          <div style="color: #333; border-top: 1px solid #eee; padding-top: 4px; line-height: 1.2;">
+            <b style="color: black;">C:</b> <i style="color: #444;">${card.answer}</i>
+          </div>
+        </div>
+      `
+    })
+
+    htmlContent += '</div></div>'
+
+    const opt = {
+      margin: 10,
+      filename: categoryName ? `${selectedLesson.value}_${categoryName}.pdf` : `${selectedLesson.value}_Tum_Kartlar.pdf`,
+      image: { type: 'jpeg', quality: 0.98 },
+      html2canvas: { 
+        scale: 2, 
+        useCORS: true, 
+        backgroundColor: '#ffffff',
+        logging: false
+      },
+      jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
+      pagebreak: { mode: ['css', 'legacy'] }
+    }
+
+    // Direct capture from string is the most reliable method
+    await html2pdf().from(htmlContent).set(opt).save()
+
   } catch (error) {
     console.error('PDF error:', error)
-    alert('PDF oluşturulamadı.')
-  } finally {
-    isPrinting.value = false
-    printCategory.value = null
+    alert('PDF hatası: ' + error.message)
   }
 }
 </script>
 <template>
-  <!-- INITIAL AUTH CHECK LOADING SCREEN -->
-  <div v-if="isInitialAuthCheck" class="auth-wrapper">
-    <div class="spinner"></div>
-    <p style="margin-top: 1rem; color: white; opacity: 0.7;">Oturum kontrol ediliyor...</p>
-  </div>
+  <div class="main-wrapper">
+    <!-- 1. SILENT LOADING (No black overlay) -->
+    <div v-if="isInitialAuthCheck" class="silent-check"></div>
 
-  <template v-else>
-    <!-- AUTH SCREEN (If not logged in) -->
-    <div v-if="!user" class="auth-wrapper">
+    <!-- 2. AUTH SCREEN (If check is done and no user) -->
+    <div v-else-if="!user" class="auth-wrapper">
     <div class="auth-box glassy">
       <div class="logo-large">🧠 KPSS Kartları</div>
       
@@ -442,10 +561,13 @@ const downloadPDF = async (categoryName = null) => {
       <p class="auth-toggle" @click="isRegisterMode = !isRegisterMode">
         {{ isRegisterMode ? 'Zaten hesabın var mı? Giriş Yap' : 'Hesabın yok mu? Kaydol' }}
       </p>
+      <div style="font-size: 10px; opacity: 0.3; margin-top: 20px;">
+        Versiyon: 1.0.8 | Giriş: {{ user ? user.email : 'Yok' }}
+      </div>
     </div>
   </div>
 
-  <!-- MAIN APP (If logged in) -->
+  <!-- 3. MAIN APP (If check is done and user exists) -->
   <div v-else class="app-container">
     <nav class="nav-bar glassy">
       <div class="logo">
@@ -454,6 +576,7 @@ const downloadPDF = async (categoryName = null) => {
       </div>
       <div class="auth-controls">
         <span class="user-email">{{ user.displayName || cachedName || user.email }}</span>
+        <button v-if="isAdmin" @click="forceRefreshData" class="btn-sm" style="background: #fbbf24; color: #000; border: none; font-size: 10px; padding: 2px 5px; margin-right: 5px;">YENİLE</button>
         <button @click="toggleReportModal" class="btn-sm btn-report">Kullanıcılar</button>
         <button @click="handleLogout" class="btn-sm btn-logout">Çıkış</button>
       </div>
@@ -554,7 +677,7 @@ const downloadPDF = async (categoryName = null) => {
               </div>
               
               <button 
-                v-if="stats.known > 0" 
+                v-if="!isAdmin && stats.known > 0" 
                 class="btn-review" 
                 @click.stop="startStudy(cat, true)"
                 title="Bildiklerini Tekrar Et"
@@ -572,12 +695,14 @@ const downloadPDF = async (categoryName = null) => {
               </button>
 
               <button 
+                v-if="!isAdmin"
                 class="btn-pdf" 
                 @click.stop="downloadPDF(cat)"
                 title="PDF İndir"
               >
                 İndir
               </button>
+
             </div>
           </div>
           
@@ -586,11 +711,43 @@ const downloadPDF = async (categoryName = null) => {
           </div>
 
           <div class="lesson-controls">
-            <button v-if="Object.keys(categories).length > 0" class="btn-secondary" @click="downloadPDF(null)">
+            <button v-if="!isAdmin && Object.keys(categories).length > 0" class="btn-secondary" @click="downloadPDF(null)">
               💾 Tümünü İndir
             </button>
-            <button v-if="isAdmin" class="btn-primary" @click="mode = 'create'">+ Yeni Kart Ekle</button>
+            <button v-if="isAdmin" class="btn-primary" @click="editingCard = null; mode = 'create'">+ Yeni Kart Ekle</button>
           </div>
+        </div>
+
+        <!-- LIST MODE (Admin Only) -->
+        <div v-else-if="mode === 'list'" key="list" class="admin-list-view">
+          <div class="list-header">
+            <h3>{{ selectedCategory || 'Tüm Konular' }} - Kart Listesi</h3>
+            <button class="close-btn" @click="mode = 'dashboard'">✕</button>
+          </div>
+          
+          <div class="card-list">
+            <div v-for="card in listCards" :key="card.id" class="list-card-item glassy">
+              <div class="card-text">
+                <div class="q"><strong>S:</strong> {{ card.question }}</div>
+                <div class="a"><strong>C:</strong> {{ card.answer }}</div>
+              </div>
+              <div class="card-actions-row">
+                <button class="btn-manage btn-edit-card" @click="editingCard = card; mode = 'edit'">✏️ Düzenle</button>
+                <button class="btn-manage btn-delete-card" @click="deleteSingleCard(card)">🗑️ Sil</button>
+              </div>
+            </div>
+            <div v-if="listCards.length === 0" class="empty-state">Kart bulunamadı.</div>
+          </div>
+        </div>
+
+        <!-- EDIT MODE -->
+        <div v-else-if="mode === 'edit'" key="edit">
+          <CardForm 
+            :editing-card="editingCard" 
+            :initial-lesson="selectedLesson" 
+            @update-card="updateCard" 
+          />
+          <div class="back-link" @click="editingCard = null; mode = mode === 'edit' ? (listCards.length > 0 ? 'list' : 'dashboard') : 'dashboard'">← Geri Dön</div>
         </div>
 
         <!-- CREATE MODE -->
@@ -602,42 +759,26 @@ const downloadPDF = async (categoryName = null) => {
         <!-- STUDY MODE -->
         <div v-else key="study">
           <div class="study-header">
-            <h3>{{ selectedCategory || 'Tüm Konular' }}</h3>
+            <div style="text-align: left;">
+              <h3 style="margin-bottom: 0;">{{ selectedCategory || 'Tüm Konular' }}</h3>
+              <span style="font-size: 10px; opacity: 0.3;">v1.0.6</span>
+            </div>
             <button class="close-btn" @click="mode = 'dashboard'">✕ Çık</button>
           </div>
           <StudyMode 
             :cards="sessionCards" 
+            :is-admin="isAdmin"
             @update-status="updateCardStatus" 
+            @edit-card="c => { editingCard = c; mode = 'edit' }"
+            @delete-card="deleteSingleCard"
           />
         </div>
       </transition>
     </main>
   </div>
 
-  <!-- PRINT-ONLY VIEW -->
-  <div v-if="isPrinting" class="print-container">
-    <h1>{{ selectedLesson }} - {{ printCategory || 'Tüm Konular' }}</h1>
-    <div 
-      v-for="(stats, cat) in categories" 
-      :key="cat" 
-      class="print-category"
-      v-show="!printCategory || printCategory === cat"
-    >
-      <h2>{{ cat }}</h2>
-      <div class="print-grid">
-        <template v-for="card in cards" :key="card.id">
-          <div 
-            v-if="card.lesson === selectedLesson && (card.category || 'Genel') === cat" 
-            class="print-card"
-          >
-            <div class="print-q"><strong>S:</strong> {{ card.question }}</div>
-            <div class="print-a"><strong>C:</strong> {{ card.answer }}</div>
-          </div>
-        </template>
-      </div>
-    </div>
+  <!-- PDF printing logic is now detached from DOM to ensure reliability -->
   </div>
-  </template>
 </template>
 
 <style scoped>
@@ -905,69 +1046,19 @@ const downloadPDF = async (categoryName = null) => {
 
 /* PRINT STYLES - used by html2pdf */
 .print-container {
-  background: white;
-  color: #000;
-  padding: 10mm;
-  width: 210mm; /* Full A4 width */
-  position: absolute;
-  left: -9999px; /* Hide from view but keep in DOM for capture */
+  background: white !important;
+  color: black !important;
+  padding: 15mm;
+  width: 190mm;
+  position: fixed; /* Fixed helps with coordinate capture */
   top: 0;
+  left: 0;
+  z-index: 999999 !important;
+  opacity: 1 !important;
+  display: block !important;
+  box-shadow: none !important;
 }
 
-.print-container h1 { 
-  text-align: center; 
-  border-bottom: 2px solid #333; 
-  padding-bottom: 1rem;
-  margin-bottom: 2rem;
-  font-size: 24px;
-}
-
-.print-category {
-  margin-bottom: 2rem;
-  break-inside: avoid;
-  page-break-inside: avoid;
-}
-
-.print-category h2 { 
-  margin-top: 0; 
-  border-bottom: 1px solid #ccc; 
-  margin-bottom: 1.5rem;
-  font-size: 18px;
-  color: #333;
-  page-break-after: avoid; /* Don't leave header alone at bottom */
-}
-
-.print-grid {
-  display: block; /* Safer for page breaks than flex */
-  width: 100%;
-}
-
-.print-card {
-  border: 1px solid #ccc;
-  border-radius: 6px;
-  padding: 4mm;
-  background: #fff;
-  width: 90mm; /* Fits 2 columns on 210mm with margins/padding */
-  display: inline-block;
-  vertical-align: top;
-  margin: 2mm;
-  box-sizing: border-box;
-  break-inside: avoid;
-  page-break-inside: avoid;
-}
-
-.print-q { 
-  font-weight: bold; 
-  font-size: 14px; 
-  margin-bottom: 8px; 
-  color: #000; 
-}
-
-.print-a { 
-  font-style: italic; 
-  color: #444; 
-  font-size: 14px;
-}
 
 /* NAVBAR LAYOUT */
 .nav-bar {
@@ -1326,5 +1417,128 @@ const downloadPDF = async (categoryName = null) => {
 
 @keyframes spin {
   to { transform: rotate(360deg); }
+}
+
+.silent-check {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  background: #0f172a; /* Match the app's dark background */
+  z-index: 9999;
+}
+
+/* ADMIN LIST VIEW */
+.admin-list-view {
+  width: 100%;
+  max-width: 800px;
+  margin: 0 auto;
+}
+
+.list-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 2rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.card-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.list-card-item {
+  padding: 1.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+  text-align: left;
+  cursor: default; /* Not clickable */
+}
+
+.card-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.card-text .q {
+  font-weight: 700;
+  color: #fff;
+}
+
+.card-text .a {
+  font-style: italic;
+  color: rgba(255, 255, 255, 0.7);
+  padding-left: 1rem;
+  border-left: 2px solid var(--primary);
+}
+
+/* Admin List Action Buttons */
+.card-actions-row {
+  display: flex;
+  gap: 12px;
+  margin-top: 15px;
+  padding-top: 15px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.btn-manage {
+  flex: 1; /* Make buttons equal width */
+  max-width: 150px;
+  padding: 10px;
+  border-radius: 8px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+  font-size: 0.9rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 1px solid transparent;
+}
+
+.btn-edit-card {
+  background: #4b5563; /* Greyish */
+  color: white;
+}
+
+.btn-edit-card:hover {
+  background: #374151;
+}
+
+.btn-delete-card {
+  background: #991b1b; /* Strong Red */
+  color: white;
+}
+
+.btn-delete-card:hover {
+  background: #7f1d1d;
+}
+
+@media (max-width: 600px) {
+  .admin-list-view {
+    padding: 0 1rem;
+  }
+  
+  .list-card-item {
+    padding: 1rem;
+    gap: 1rem;
+  }
+  
+  .card-actions-row {
+    flex-direction: column;
+    gap: 8px;
+  }
+  
+  .btn-manage {
+    max-width: none;
+    width: 100%;
+  }
 }
 </style>
