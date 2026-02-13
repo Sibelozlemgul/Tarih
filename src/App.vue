@@ -55,9 +55,8 @@ onMounted(() => {
   onAuthStateChanged(auth, (currentUser) => {
     user.value = currentUser
     
-    // Check Admin (You can also hardcode your admin email here for extra safety in UI)
-    // admin@kpss.com is the hardcoded admin for this example app logic
-    if (currentUser && currentUser.email === 'admin@kpss.com') {
+    // Check Admin
+    if (currentUser && currentUser.email === 'sibelozlemgul811@gmail.com') {
       isAdmin.value = true
     } else {
       isAdmin.value = false
@@ -267,37 +266,41 @@ const downloadPDF = async (categoryName = null) => {
 </script>
 
 <template>
-  <div class="app-container">
+  <!-- AUTH SCREEN (If not logged in) -->
+  <div v-if="!user" class="auth-wrapper">
+    <div class="auth-box glassy">
+      <div class="logo-large">🧠 KPSS Kartları</div>
+      
+      <h3>{{ isRegisterMode ? 'Yeni Hesap Oluştur' : 'Giriş Yap' }}</h3>
+      
+      <form @submit.prevent="handleAuth">
+        <input v-model="email" type="email" placeholder="E-posta" required />
+        <input v-model="password" type="password" placeholder="Şifre" required />
+        
+        <button type="submit" class="btn-primary full-width">
+          {{ isRegisterMode ? 'Kaydol ve Başla' : 'Giriş Yap' }}
+        </button>
+      </form>
+
+      <p class="auth-toggle" @click="isRegisterMode = !isRegisterMode">
+        {{ isRegisterMode ? 'Zaten hesabın var mı? Giriş Yap' : 'Hesabın yok mu? Kaydol' }}
+      </p>
+    </div>
+  </div>
+
+  <!-- MAIN APP (If logged in) -->
+  <div v-else class="app-container">
     <nav class="nav-bar glassy">
       <div class="logo">
         <span v-if="selectedLesson" class="back-arrow" @click="goHome">←</span>
         {{ selectedLesson ? selectedLesson : '🧠 KPSS Kartları' }}
       </div>
       <div class="auth-controls">
-        <span v-if="!isAdmin" @click="showLogin = true" class="icon-btn lock-icon">🔒</span>
-        <span v-else @click="handleLogout" class="icon-btn unlock-icon" title="Çıkış Yap">🔓</span>
+        <span class="user-email">{{ user.email }}</span>
+        <span @click="handleLogout" class="icon-btn logout-icon" title="Çıkış Yap">🚪</span>
       </div>
     </nav>
-
-    <!-- LOGIN / REGISTER MODAL -->
-    <div v-if="showLogin" class="modal-overlay" @click.self="showLogin = false">
-      <div class="modal glassy">
-        <h3>{{ isRegisterMode ? 'Kayıt Ol' : 'Giriş Yap' }}</h3>
-        <input v-model="email" type="email" placeholder="E-posta" />
-        <input v-model="password" type="password" placeholder="Şifre" @keyup.enter="handleAuth" />
-        
-        <div class="modal-actions">
-          <button class="btn-secondary" @click="showLogin = false">İptal</button>
-          <button class="btn-primary" @click="handleAuth">
-            {{ isRegisterMode ? 'Kaydol' : 'Giriş Yap' }}
-          </button>
-        </div>
-
-        <p class="auth-toggle" @click="isRegisterMode = !isRegisterMode">
-          {{ isRegisterMode ? 'Zaten hesabın var mı? Giriş Yap' : 'Hesabın yok mu? Kaydol' }}
-        </p>
-      </div>
-    </div>
+    <!-- REMOVED OLD MODAL -->
 
     <main class="main-content">
       <transition name="fade" mode="out-in">
@@ -824,5 +827,62 @@ const downloadPDF = async (categoryName = null) => {
 
 .auth-toggle:hover {
   color: white;
+}
+
+/* FULL SCREEN AUTH */
+.auth-wrapper {
+  height: 100vh;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  background: linear-gradient(135deg, #1e1e2f 0%, #2a2a40 100%);
+}
+
+.auth-box {
+  width: 90%;
+  max-width: 400px;
+  padding: 3rem 2rem;
+  border-radius: 20px;
+  text-align: center;
+  box-shadow: 0 20px 40px rgba(0,0,0,0.4);
+}
+
+.logo-large {
+  font-size: 2rem;
+  margin-bottom: 2rem;
+  font-weight: bold;
+  background: linear-gradient(to right, #4facfe 0%, #00f2fe 100%);
+  background-clip: text;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.auth-box form input {
+  display: block;
+  width: 100%;
+  padding: 1rem;
+  margin-bottom: 1rem;
+  border-radius: 12px;
+  border: 1px solid rgba(255,255,255,0.1);
+  background: rgba(255,255,255,0.05);
+  color: white;
+  font-size: 1rem;
+}
+
+.full-width {
+  width: 100%;
+  padding: 1rem;
+  font-size: 1.1rem;
+  margin-top: 1rem;
+}
+
+.user-email {
+  font-size: 0.9rem;
+  margin-right: 1rem;
+  opacity: 0.7;
+}
+
+.logout-icon {
+  display: inline-block;
 }
 </style>
