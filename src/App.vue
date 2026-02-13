@@ -401,7 +401,7 @@ const downloadPDF = async (categoryName = null) => {
       image:        { type: 'jpeg', quality: 0.98 },
       html2canvas:  { scale: 2, useCORS: true, logging: false },
       jsPDF:        { unit: 'mm', format: 'a4', orientation: 'portrait' },
-      pagebreak:    { mode: ['avoid-all', 'css', 'legacy'] }
+      pagebreak:    { mode: 'css', avoid: '.print-card' }
     }
 
     await html2pdf().set(opt).from(element).save()
@@ -929,15 +929,15 @@ const downloadPDF = async (categoryName = null) => {
 .print-category h2 { 
   margin-top: 0; 
   border-bottom: 1px solid #ccc; 
-  margin-bottom: 1rem;
+  margin-bottom: 1.5rem;
   font-size: 18px;
   color: #333;
+  page-break-after: avoid; /* Don't leave header alone at bottom */
 }
 
 .print-grid {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 15px;
+  display: block; /* Safer for page breaks than flex */
+  width: 100%;
 }
 
 .print-card {
@@ -945,7 +945,11 @@ const downloadPDF = async (categoryName = null) => {
   border-radius: 8px;
   padding: 15px;
   background: #f9f9f9;
-  width: calc(50% - 8px); /* Two columns layout using flex */
+  width: 85mm; /* Fixed width for two columns on A4 */
+  display: inline-block;
+  vertical-align: top;
+  margin: 5px;
+  box-sizing: border-box;
   break-inside: avoid;
   page-break-inside: avoid;
 }
