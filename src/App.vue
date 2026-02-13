@@ -1,74 +1,115 @@
 <script setup>
 import { ref, computed, onMounted, watch } from 'vue'
 import { db, auth } from './firebase'
-import { collection, addDoc, onSnapshot, doc, updateDoc, deleteDoc, query, orderBy } from 'firebase/firestore'
-import { onAuthStateChanged, signInWithEmailAndPassword, signOut } from 'firebase/auth'
+import { collection, addDoc, onSnapshot, doc, updateDoc, deleteDoc, query, orderBy, setDoc, where } from 'firebase/firestore'
+import { onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut } from 'firebase/auth'
 import CardForm from './components/CardForm.vue'
 import StudyMode from './components/StudyMode.vue'
 
-const cards = ref([])
+// Data
+const rawCards = ref([]) // Master content from 'flashcards' collection
+const userProgress = ref({}) // Map: cardId -> status ('known' | 'unknown')
 const mode = ref('dashboard') // 'dashboard' | 'create' | 'study'
 const sessionCards = ref([])
 const selectedCategory = ref(null) // null means all
 const printCategory = ref(null) // for PDF generation
 const selectedLesson = ref(null) // 'Tarih', 'Coğrafya', 'Vatandaşlık' or null
 
+// Auth State
+const user = ref(null)
 const isAdmin = ref(false)
 const showLogin = ref(false)
+const isRegisterMode = ref(false)
 const email = ref('')
 const password = ref('')
 
+// Constants
 const lessons = [
   { id: 'Tarih', emoji: '📜', colors: ['rgba(245, 158, 11, 0.2)', 'rgba(234, 88, 12, 0.2)'] },
   { id: 'Coğrafya', emoji: '🌍', colors: ['rgba(16, 185, 129, 0.2)', 'rgba(13, 148, 136, 0.2)'] },
   { id: 'Vatandaşlık', emoji: '⚖️', colors: ['rgba(59, 130, 246, 0.2)', 'rgba(79, 70, 229, 0.2)'] }
 ]
 
-// Load from Firestore
+// Computed: Merges Master Data + User Progress
+const cards = computed(() => {
+  return rawCards.value.map(card => ({
+    ...card,
+    status: userProgress.value[card.id] || 'new' // Default to 'new' if no progress found
+  }))
+})
+
+// Lifecycle
+let progressUnsub = null
+
 onMounted(() => {
+  // 1. Listen to Master Data (Flashcards) - Always active
   const q = query(collection(db, 'flashcards'), orderBy('timestamp', 'desc'))
-  
   onSnapshot(q, (snapshot) => {
-    cards.value = snapshot.docs.map(doc => ({
+    rawCards.value = snapshot.docs.map(doc => ({
       id: doc.id,
       ...doc.data()
     }))
   })
 
-  // Auth Listener
-  onAuthStateChanged(auth, (user) => {
-    if (user) {
+  // 2. Auth Listener
+  onAuthStateChanged(auth, (currentUser) => {
+    user.value = currentUser
+    
+    // Check Admin (You can also hardcode your admin email here for extra safety in UI)
+    // admin@kpss.com is the hardcoded admin for this example app logic
+    if (currentUser && currentUser.email === 'admin@kpss.com') {
       isAdmin.value = true
     } else {
       isAdmin.value = false
     }
+
+    // 3. Listen to User Progress (Only if logged in)
+    if (currentUser) {
+      const pQ = query(collection(db, 'user_progress'), where('userId', '==', currentUser.uid))
+      progressUnsub = onSnapshot(pQ, (snapshot) => {
+        const progressMap = {}
+        snapshot.docs.forEach(doc => {
+          const data = doc.data()
+          progressMap[data.cardId] = data.status
+        })
+        userProgress.value = progressMap
+      })
+    } else {
+      if (progressUnsub) progressUnsub()
+      userProgress.value = {} // Reset progress on logout
+    }
   })
 })
 
-const handleLogin = async () => {
+const handleAuth = async () => {
   try {
-    await signInWithEmailAndPassword(auth, email.value, password.value)
+    if (isRegisterMode.value) {
+      await createUserWithEmailAndPassword(auth, email.value, password.value)
+      alert("Kayıt başarılı! Hoşgeldiniz.")
+    } else {
+      await signInWithEmailAndPassword(auth, email.value, password.value)
+    }
     showLogin.value = false
     email.value = ''
     password.value = ''
   } catch (error) {
-    alert('Giriş başarısız: ' + error.message)
+    alert('İşlem başarısız: ' + error.message)
   }
 }
 
 const handleLogout = async () => {
-  await signOut(auth)
+  if (confirm('Çıkış yapmak istediğine emin misin?')) {
+    await signOut(auth)
+    mode.value = 'dashboard'
+  }
 }
 
 const addCard = async (card) => {
   if (!isAdmin.value) return 
   
-  // We ignore the local ID and let Firestore generate one
   const { id, ...cardData } = card
-  
   try {
     await addDoc(collection(db, 'flashcards'), cardData)
-    // Optionally go back to dashboard after adding
     mode.value = 'dashboard'
   } catch (e) {
     console.error("Error adding card: ", e)
@@ -77,12 +118,25 @@ const addCard = async (card) => {
 }
 
 const updateCardStatus = async ({ card, status }) => {
-  const cardRef = doc(db, 'flashcards', card.id)
+  if (!user.value) {
+    alert("İlerlemenizi kaydetmek için giriş yapmalısınız.")
+    return
+  }
+
+  // Create a composite ID for the progress document: userId_cardId
+  const progressDocId = `${user.value.uid}_${card.id}`
+  const progressRef = doc(db, 'user_progress', progressDocId)
+
   try {
-    await updateDoc(cardRef, {
+    await setDoc(progressRef, {
+      userId: user.value.uid,
+      cardId: card.id,
       status: status,
       lastReviewed: Date.now()
-    })
+    }, { merge: true })
+    
+    // Local update for immediate feedback (though snapshot will handle it)
+    userProgress.value[card.id] = status
   } catch (e) {
     console.error("Error updating status: ", e)
   }
@@ -100,9 +154,18 @@ const goHome = () => {
 }
 
 const startStudy = (category = null, reviewMode = false) => {
+  if (!user.value && !isAdmin.value) {
+    // Optional: Force login to study? Or allow guest study without saving?
+    // User requested "saving per user", so let's warn.
+    if (!confirm("Giriş yapmadığınız için ilerlemeniz kaydedilmeyecek. Devam etmek istiyor musunuz?")) {
+      showLogin.value = true
+      return
+    }
+  }
+
   selectedCategory.value = category
   
-  // Filter by lesson AND category
+  // Filter by lesson AND category using the COMPUTED cards (which have merged status)
   let pool = cards.value.filter(c => c.lesson === selectedLesson.value)
   
   if (category) {
@@ -117,7 +180,7 @@ const startStudy = (category = null, reviewMode = false) => {
       return
     }
   } else {
-    // Normal study: Prioritize unknown
+    // Normal study: Prioritize unknown/new
     sessionCards.value = pool.filter(c => c.status !== 'known').sort((a, b) => a.timestamp - b.timestamp)
     
     if (sessionCards.value.length === 0) {
@@ -135,9 +198,8 @@ const deleteCategory = async (category) => {
   if (!isAdmin.value) return
 
   if (confirm(`"${category}" setini ve içindeki TÜM kartları silmek istediğine emin misin? (YÖNETİCİ İŞLEMİ)`)) {
-    const cardsToDelete = cards.value.filter(c => c.category === category && c.lesson === selectedLesson.value)
+    const cardsToDelete = rawCards.value.filter(c => c.category === category && c.lesson === selectedLesson.value)
     
-    // Deleting one by one (Firestore doesn't support delete collection from client)
     for (const card of cardsToDelete) {
       try {
          await deleteDoc(doc(db, 'flashcards', card.id))
@@ -217,16 +279,23 @@ const downloadPDF = async (categoryName = null) => {
       </div>
     </nav>
 
-    <!-- LOGIN MODAL -->
+    <!-- LOGIN / REGISTER MODAL -->
     <div v-if="showLogin" class="modal-overlay" @click.self="showLogin = false">
       <div class="modal glassy">
-        <h3>Yönetici Girişi</h3>
+        <h3>{{ isRegisterMode ? 'Kayıt Ol' : 'Giriş Yap' }}</h3>
         <input v-model="email" type="email" placeholder="E-posta" />
-        <input v-model="password" type="password" placeholder="Şifre" @keyup.enter="handleLogin" />
+        <input v-model="password" type="password" placeholder="Şifre" @keyup.enter="handleAuth" />
+        
         <div class="modal-actions">
           <button class="btn-secondary" @click="showLogin = false">İptal</button>
-          <button class="btn-primary" @click="handleLogin">Giriş Yap</button>
+          <button class="btn-primary" @click="handleAuth">
+            {{ isRegisterMode ? 'Kaydol' : 'Giriş Yap' }}
+          </button>
         </div>
+
+        <p class="auth-toggle" @click="isRegisterMode = !isRegisterMode">
+          {{ isRegisterMode ? 'Zaten hesabın var mı? Giriş Yap' : 'Hesabın yok mu? Kaydol' }}
+        </p>
       </div>
     </div>
 
@@ -743,5 +812,17 @@ const downloadPDF = async (categoryName = null) => {
 
 .modal-actions button {
   flex: 1;
+}
+
+.auth-toggle {
+  margin-top: 1rem;
+  font-size: 0.9rem;
+  color: rgba(255, 255, 255, 0.7);
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.auth-toggle:hover {
+  color: white;
 }
 </style>
