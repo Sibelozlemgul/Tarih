@@ -1,7 +1,7 @@
 <script setup>
 import { ref, computed, onMounted, watch } from 'vue'
 import { db, auth } from './firebase'
-import { collection, addDoc, onSnapshot, doc, updateDoc, deleteDoc, query, orderBy, setDoc, where, getDocs } from 'firebase/firestore'
+import { collection, addDoc, onSnapshot, doc, updateDoc, deleteDoc, query, orderBy, setDoc, where, getDocs, getDoc } from 'firebase/firestore'
 import { onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, updateProfile } from 'firebase/auth'
 import CardForm from './components/CardForm.vue'
 import StudyMode from './components/StudyMode.vue'
@@ -59,7 +59,7 @@ onMounted(() => {
   })
 
   // 2. Auth Listener
-  onAuthStateChanged(auth, (currentUser) => {
+  onAuthStateChanged(auth, async (currentUser) => {
     user.value = currentUser
     
     // Check Admin
@@ -76,6 +76,22 @@ onMounted(() => {
         localStorage.setItem('userName', currentUser.displayName)
       }
       
+      // AUTO-MIGRATE: Ensure user exists in 'users' collection (for old accounts)
+      const userDocRef = doc(db, 'users', currentUser.uid)
+      const userSnap = await getDoc(userDocRef)
+      
+      if (!userSnap.exists()) {
+        await setDoc(userDocRef, {
+          email: currentUser.email,
+          displayName: currentUser.displayName || cachedName.value || 'İsimsiz Kullanıcı',
+          createdAt: Date.now(),
+          lastLogin: Date.now()
+        })
+      } else {
+        // Optional: Update last login
+        await updateDoc(userDocRef, { lastLogin: Date.now() })
+      }
+
       // 3. Listen to User Progress
       const pQ = query(collection(db, 'user_progress'), where('userId', '==', currentUser.uid))
       progressUnsub = onSnapshot(pQ, (snapshot) => {
@@ -135,31 +151,26 @@ const handleAuth = async () => {
 
 // Admin Report Logic
 const fetchUserReports = async () => {
-  // Removed admin check to allow everyone to see reports
-  
-  // 1. Fetch Process (This might be heavy if many users, but fine for MVP)
-  // Since we query all user_progress, it's better to do aggregation on client side for now.
-  
-  // A. Get All Users
-  const usersSnapshot = await getDocs(collection(db, 'users'))
+  // Parallel Fetch for Speed
+  const [usersSnapshot, progressSnapshot] = await Promise.all([
+    getDocs(collection(db, 'users')),
+    getDocs(collection(db, 'user_progress'))
+  ])
+
+  // A. Process Users
   const users = usersSnapshot.docs.map(d => ({ uid: d.id, ...d.data(), stats: {} }))
 
-  // B. Get All Progress
-  const progressSnapshot = await getDocs(collection(db, 'user_progress'))
-  
-  // C. Aggregate
+  // B. Process Progress
   const progressByUserId = {}
-  
   progressSnapshot.docs.forEach(doc => {
     const data = doc.data()
-    // Only count 'known'
     if (data.status === 'known') {
         if (!progressByUserId[data.userId]) progressByUserId[data.userId] = []
         progressByUserId[data.userId].push(data.cardId)
     }
   })
 
-  // D. Map to Report Structure
+  // C. Map to Report Structure
   userReports.value = users.map(u => {
     const knownCardIds = progressByUserId[u.uid] || []
     
@@ -192,19 +203,31 @@ const isLoadingReport = ref(false)
 // ... (stats constants)
 
 const toggleReportModal = async () => {
+  // If open, just close it
+  if (showReportModal.value) {
+    showReportModal.value = false
+    return
+  }
+
+  // Open and Load
+  showReportModal.value = true
+  isLoadingReport.value = true
+
   try {
-    showReportModal.value = !showReportModal.value
-    
-    // If opening the modal, fetch data
-    if (showReportModal.value) {
-      isLoadingReport.value = true
-      await fetchUserReports()
-      isLoadingReport.value = false
-    }
+    // 10 Second Timeout Race
+    const timeoutPromise = new Promise((_, reject) => 
+      setTimeout(() => reject(new Error("Sunucudan yanıt alınamadı (Zaman aşımı). İnternet bağlantınızı kontrol edin veya güvenlik ayarları engelliyor olabilir.")), 10000)
+    )
+
+    await Promise.race([
+      fetchUserReports(),
+      timeoutPromise
+    ])
   } catch (e) {
-    isLoadingReport.value = false
     console.error(e)
-    alert("Rapor yüklenemedi: " + e.message)
+    alert("Hata: " + (e.message || "Bilinmeyen bir hata oluştu."))
+  } finally {
+    isLoadingReport.value = false
   }
 }
 
