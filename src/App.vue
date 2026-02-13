@@ -186,11 +186,26 @@ const fetchUserReports = async () => {
   })
 }
 
+// Admin Reports Loading
+const isLoadingReport = ref(false)
+
+// ... (stats constants)
+
 const toggleReportModal = async () => {
-  if (!showReportModal.value) {
-    await fetchUserReports()
+  try {
+    showReportModal.value = !showReportModal.value
+    
+    // If opening the modal, fetch data
+    if (showReportModal.value) {
+      isLoadingReport.value = true
+      await fetchUserReports()
+      isLoadingReport.value = false
+    }
+  } catch (e) {
+    isLoadingReport.value = false
+    console.error(e)
+    alert("Rapor yüklenemedi: " + e.message)
   }
-  showReportModal.value = !showReportModal.value
 }
 
 
@@ -404,33 +419,41 @@ const downloadPDF = async (categoryName = null) => {
     <div v-if="showReportModal" class="modal-overlay" @click.self="showReportModal = false">
       <div class="modal glassy report-modal">
         <h3>👥 Öğrenci İlerleme Raporu</h3>
-        <p class="subtitle">Toplam Kayıtlı Öğrenci: {{ userReports.length }}</p>
         
-        <div class="report-list">
-          <div v-for="u in userReports" :key="u.uid" class="report-card">
-            <div class="report-header" @click="expandedUser = expandedUser === u.uid ? null : u.uid">
-              <div class="user-main-info">
-                <span class="u-name">{{ u.displayName || u.email }}</span>
-                <span class="u-total badge" :class="u.totalKnown > 0 ? 'bg-green' : 'bg-gray'">
-                  {{ u.totalKnown }} Kart Biliyor
-                </span>
-              </div>
-              <span class="report-arrow">{{ expandedUser === u.uid ? '▲' : '▼' }}</span>
-            </div>
+        <div v-if="isLoadingReport" class="loading-state">
+          <div class="spinner"></div>
+          <p>Veriler yükleniyor, lütfen bekleyin...</p>
+        </div>
 
-            <div v-if="expandedUser === u.uid" class="report-details">
-              <div v-if="Object.keys(u.breakdown).length === 0" class="no-data">
-                Henüz çalışılan kart yok.
+        <div v-else>
+          <p class="subtitle">Toplam Kayıtlı Öğrenci: {{ userReports.length }}</p>
+          
+          <div class="report-list">
+            <div v-for="u in userReports" :key="u.uid" class="report-card">
+              <div class="report-header" @click="expandedUser = expandedUser === u.uid ? null : u.uid">
+                <div class="user-main-info">
+                  <span class="u-name">{{ u.displayName || u.email }}</span>
+                  <span class="u-total badge" :class="u.totalKnown > 0 ? 'bg-green' : 'bg-gray'">
+                    {{ u.totalKnown }} Kart Biliyor
+                  </span>
+                </div>
+                <span class="report-arrow">{{ expandedUser === u.uid ? '▲' : '▼' }}</span>
               </div>
-              <div v-else>
-                <div v-for="(cats, lessonName) in u.breakdown" :key="lessonName" class="lesson-breakdown">
-                  <h5>{{ lessonName }}</h5>
-                  <ul>
-                    <li v-for="(count, catName) in cats" :key="catName">
-                      <span>{{ catName }}:</span>
-                      <strong>{{ count }}</strong>
-                    </li>
-                  </ul>
+
+              <div v-if="expandedUser === u.uid" class="report-details">
+                <div v-if="Object.keys(u.breakdown).length === 0" class="no-data">
+                  Henüz çalışılan kart yok.
+                </div>
+                <div v-else>
+                  <div v-for="(cats, lessonName) in u.breakdown" :key="lessonName" class="lesson-breakdown">
+                    <h5>{{ lessonName }}</h5>
+                    <ul>
+                      <li v-for="(count, catName) in cats" :key="catName">
+                        <span>{{ catName }}:</span>
+                        <strong>{{ count }}</strong>
+                      </li>
+                    </ul>
+                  </div>
                 </div>
               </div>
             </div>
@@ -890,6 +913,8 @@ const downloadPDF = async (categoryName = null) => {
   align-items: center;
   padding: 1rem 2rem;
   margin-bottom: 2rem;
+  position: relative;
+  z-index: 100; /* Ensure it stays on top */
 }
 
 .logo {
@@ -1185,5 +1210,26 @@ const downloadPDF = async (categoryName = null) => {
   color: rgba(255, 255, 255, 0.5);
   font-style: italic;
   padding: 1rem;
+}
+
+.loading-state {
+  text-align: center;
+  padding: 2rem;
+  color: rgba(255,255,255,0.7);
+}
+
+.spinner {
+  width: 40px;
+  height: 40px;
+  border: 4px solid rgba(255,255,255,0.1);
+  border-left-color: #4f46e5;
+  border-radius: 50%;
+  margin: 0 auto 1rem;
+  animation: spin 1s linear infinite;
+}
+
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
 }
 </style>
