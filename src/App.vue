@@ -14,6 +14,7 @@ const sessionCards = ref([])
 const selectedCategory = ref(null) // null means all
 const printCategory = ref(null) // for PDF generation
 const selectedLesson = ref(null) // 'Tarih', 'Coğrafya', 'Vatandaşlık' or null
+const isPrinting = ref(false)
 
 // Auth State
 const user = ref(null)
@@ -379,29 +380,28 @@ const categories = computed(() => {
 
 const downloadPDF = async (categoryName = null) => {
   printCategory.value = categoryName
+  isPrinting.value = true
   
-  await new Promise(r => setTimeout(r, 100))
+  // Wait for Vue to render the print container
+  await new Promise(r => setTimeout(r, 500))
 
   const element = document.querySelector('.print-container')
-  element.style.display = 'block'
+  if (!element) return
   
   try {
     const html2pdf = (await import('html2pdf.js')).default
     
-    let filename = ''
-    if (categoryName) {
-      filename = `${selectedLesson.value}_${categoryName}.pdf`
-    } else {
-      filename = `${selectedLesson.value}_Tum_Kartlar.pdf`
-    }
+    let filename = categoryName 
+      ? `${selectedLesson.value}_${categoryName}.pdf`
+      : `${selectedLesson.value}_Tum_Kartlar.pdf`
 
     const opt = {
       margin:       10,
       filename:     filename,
       image:        { type: 'jpeg', quality: 0.98 },
-      html2canvas:  { scale: 2, useCORS: true, logging: false },
+      html2canvas:  { scale: 2, useCORS: true, logging: false, letterRendering: true },
       jsPDF:        { unit: 'mm', format: 'a4', orientation: 'portrait' },
-      pagebreak:    { mode: 'css', avoid: '.print-card' }
+      pagebreak:    { mode: 'css' }
     }
 
     await html2pdf().set(opt).from(element).save()
@@ -409,7 +409,7 @@ const downloadPDF = async (categoryName = null) => {
     console.error('PDF error:', error)
     alert('PDF oluşturulamadı.')
   } finally {
-    element.style.display = 'none'
+    isPrinting.value = false
     printCategory.value = null
   }
 }
@@ -615,8 +615,8 @@ const downloadPDF = async (categoryName = null) => {
   </div>
 
   <!-- PRINT-ONLY VIEW -->
-  <div class="print-container">
-    <h1>{{ selectedLesson || 'Tarih' }} - {{ printCategory || 'Tüm Konular' }}</h1>
+  <div v-if="isPrinting" class="print-container">
+    <h1>{{ selectedLesson }} - {{ printCategory || 'Tüm Konular' }}</h1>
     <div 
       v-for="(stats, cat) in categories" 
       :key="cat" 
@@ -625,14 +625,15 @@ const downloadPDF = async (categoryName = null) => {
     >
       <h2>{{ cat }}</h2>
       <div class="print-grid">
-        <div 
-          v-for="card in cards.filter(c => c.lesson === selectedLesson && (c.category || 'Genel') === cat)" 
-          :key="card.id" 
-          class="print-card"
-        >
-          <div class="print-q"><strong>S:</strong> {{ card.question }}</div>
-          <div class="print-a"><strong>C:</strong> {{ card.answer }}</div>
-        </div>
+        <template v-for="card in cards" :key="card.id">
+          <div 
+            v-if="card.lesson === selectedLesson && (card.category || 'Genel') === cat" 
+            class="print-card"
+          >
+            <div class="print-q"><strong>S:</strong> {{ card.question }}</div>
+            <div class="print-a"><strong>C:</strong> {{ card.answer }}</div>
+          </div>
+        </template>
       </div>
     </div>
   </div>
@@ -904,12 +905,13 @@ const downloadPDF = async (categoryName = null) => {
 
 /* PRINT STYLES - used by html2pdf */
 .print-container {
-  display: none;
   background: white;
-  color: black;
-  padding: 20px;
-  width: 190mm; /* Standard A4 width minus margins */
-  margin: 0 auto;
+  color: #000;
+  padding: 10mm;
+  width: 210mm; /* Full A4 width */
+  position: absolute;
+  left: -9999px; /* Hide from view but keep in DOM for capture */
+  top: 0;
 }
 
 .print-container h1 { 
@@ -941,14 +943,14 @@ const downloadPDF = async (categoryName = null) => {
 }
 
 .print-card {
-  border: 1px solid #ddd;
-  border-radius: 8px;
-  padding: 15px;
-  background: #f9f9f9;
-  width: 85mm; /* Fixed width for two columns on A4 */
+  border: 1px solid #ccc;
+  border-radius: 6px;
+  padding: 4mm;
+  background: #fff;
+  width: 90mm; /* Fits 2 columns on 210mm with margins/padding */
   display: inline-block;
   vertical-align: top;
-  margin: 5px;
+  margin: 2mm;
   box-sizing: border-box;
   break-inside: avoid;
   page-break-inside: avoid;
