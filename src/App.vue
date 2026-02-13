@@ -883,13 +883,42 @@ const downloadPDF = async (categoryName = null) => {
   font-size: 14px;
 }
 
-/* AUTH CONTROLS */
-.auth-controls {
-  position: absolute;
-  right: 2rem;
-  top: 50%;
-  transform: translateY(-50%);
+/* NAVBAR LAYOUT */
+.nav-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1rem 2rem;
+  margin-bottom: 2rem;
 }
+
+.logo {
+  font-size: 1.5rem;
+  font-weight: bold;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.auth-controls {
+  display: flex;
+  align-items: center;
+  gap: 15px;
+}
+
+.user-email {
+  font-size: 0.95rem;
+  color: rgba(255,255,255,0.9);
+  font-weight: 500;
+  display: none; /* Hide email on very small screens if needed, or keep */
+}
+
+@media (min-width: 600px) {
+  .user-email {
+    display: inline-block;
+  }
+}
+
 
 .icon-btn {
   font-size: 1.5rem;
@@ -1029,11 +1058,7 @@ const downloadPDF = async (categoryName = null) => {
   display: inline-block;
 }
 
-.auth-controls {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
+/* .auth-controls removed from here to consolidate below */
 
 .user-email {
   font-size: 0.95rem;
