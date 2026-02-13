@@ -1,7 +1,7 @@
 <script setup>
 import { ref, computed, onMounted, watch } from 'vue'
 import { db, auth } from './firebase'
-import { collection, addDoc, onSnapshot, doc, updateDoc, deleteDoc, query, orderBy, setDoc, where } from 'firebase/firestore'
+import { collection, addDoc, onSnapshot, doc, updateDoc, deleteDoc, query, orderBy, setDoc, where, getDocs } from 'firebase/firestore'
 import { onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, updateProfile } from 'firebase/auth'
 import CardForm from './components/CardForm.vue'
 import StudyMode from './components/StudyMode.vue'
@@ -23,6 +23,12 @@ const isRegisterMode = ref(false)
 const email = ref('')
 const password = ref('')
 const fullName = ref('')
+const cachedName = ref(localStorage.getItem('userName') || '')
+
+// Admin Reports
+const showReportModal = ref(false)
+const userReports = ref([])
+const expandedUser = ref(null) // ID of user to show details for
 
 // Constants
 const lessons = [
@@ -63,8 +69,14 @@ onMounted(() => {
       isAdmin.value = false
     }
 
-    // 3. Listen to User Progress (Only if logged in)
     if (currentUser) {
+      // Sync cached name
+      if (currentUser.displayName) {
+        cachedName.value = currentUser.displayName
+        localStorage.setItem('userName', currentUser.displayName)
+      }
+      
+      // 3. Listen to User Progress
       const pQ = query(collection(db, 'user_progress'), where('userId', '==', currentUser.uid))
       progressUnsub = onSnapshot(pQ, (snapshot) => {
         const progressMap = {}
@@ -77,6 +89,8 @@ onMounted(() => {
     } else {
       if (progressUnsub) progressUnsub()
       userProgress.value = {} // Reset progress on logout
+      cachedName.value = ''
+      localStorage.removeItem('userName')
     }
   })
 })
@@ -89,6 +103,19 @@ const handleAuth = async () => {
       await updateProfile(userCredential.user, {
         displayName: fullName.value
       })
+      
+      // Save User Doc for Reports
+      await setDoc(doc(db, 'users', userCredential.user.uid), {
+        email: email.value,
+        displayName: fullName.value,
+        createdAt: Date.now()
+      })
+
+      // FORCE UPDATE LOCAL USER STATE
+      user.value = { ...userCredential.user, displayName: fullName.value }
+      cachedName.value = fullName.value
+      localStorage.setItem('userName', fullName.value)
+      
       alert("Kayıt başarılı! Hoşgeldiniz, " + fullName.value)
     } else {
       await signInWithEmailAndPassword(auth, email.value, password.value)
@@ -105,6 +132,67 @@ const handleAuth = async () => {
     }
   }
 }
+
+// Admin Report Logic
+const fetchUserReports = async () => {
+  // Removed admin check to allow everyone to see reports
+  
+  // 1. Fetch Process (This might be heavy if many users, but fine for MVP)
+  // Since we query all user_progress, it's better to do aggregation on client side for now.
+  
+  // A. Get All Users
+  const usersSnapshot = await getDocs(collection(db, 'users'))
+  const users = usersSnapshot.docs.map(d => ({ uid: d.id, ...d.data(), stats: {} }))
+
+  // B. Get All Progress
+  const progressSnapshot = await getDocs(collection(db, 'user_progress'))
+  
+  // C. Aggregate
+  const progressByUserId = {}
+  
+  progressSnapshot.docs.forEach(doc => {
+    const data = doc.data()
+    // Only count 'known'
+    if (data.status === 'known') {
+        if (!progressByUserId[data.userId]) progressByUserId[data.userId] = []
+        progressByUserId[data.userId].push(data.cardId)
+    }
+  })
+
+  // D. Map to Report Structure
+  userReports.value = users.map(u => {
+    const knownCardIds = progressByUserId[u.uid] || []
+    
+    // Breakdown by Lesson -> Category
+    const breakdown = {}
+    let totalKnown = 0
+    
+    knownCardIds.forEach(cardId => {
+      const card = rawCards.value.find(c => c.id === cardId)
+      if (card) {
+        if (!breakdown[card.lesson]) breakdown[card.lesson] = {}
+        if (!breakdown[card.lesson][card.category]) breakdown[card.lesson][card.category] = 0
+        
+        breakdown[card.lesson][card.category]++
+        totalKnown++
+      }
+    })
+
+    return {
+      ...u,
+      totalKnown,
+      breakdown
+    }
+  })
+}
+
+const toggleReportModal = async () => {
+  if (!showReportModal.value) {
+    await fetchUserReports()
+  }
+  showReportModal.value = !showReportModal.value
+}
+
 
 const handleLogout = async () => {
   if (confirm('Çıkış yapmak istediğine emin misin?')) {
@@ -307,11 +395,51 @@ const downloadPDF = async (categoryName = null) => {
         {{ selectedLesson ? selectedLesson : '🧠 KPSS Kartları' }}
       </div>
       <div class="auth-controls">
-        <span class="user-email">{{ user.displayName || user.email }}</span>
-        <button @click="handleLogout" class="btn-sm btn-logout">Çıkış Yap</button>
+        <button @click="toggleReportModal" class="btn-sm btn-report">👥 Kullanıcılar</button>
+        <span class="user-email">{{ user.displayName || cachedName || user.email }}</span>
+        <button @click="handleLogout" class="btn-sm btn-logout">Çıkış</button>
       </div>
     </nav>
-    <!-- REMOVED OLD MODAL -->
+    <!-- USERS REPORT MODAL -->
+    <div v-if="showReportModal" class="modal-overlay" @click.self="showReportModal = false">
+      <div class="modal glassy report-modal">
+        <h3>👥 Öğrenci İlerleme Raporu</h3>
+        <p class="subtitle">Toplam Kayıtlı Öğrenci: {{ userReports.length }}</p>
+        
+        <div class="report-list">
+          <div v-for="u in userReports" :key="u.uid" class="report-card">
+            <div class="report-header" @click="expandedUser = expandedUser === u.uid ? null : u.uid">
+              <div class="user-main-info">
+                <span class="u-name">{{ u.displayName || u.email }}</span>
+                <span class="u-total badge" :class="u.totalKnown > 0 ? 'bg-green' : 'bg-gray'">
+                  {{ u.totalKnown }} Kart Biliyor
+                </span>
+              </div>
+              <span class="report-arrow">{{ expandedUser === u.uid ? '▲' : '▼' }}</span>
+            </div>
+
+            <div v-if="expandedUser === u.uid" class="report-details">
+              <div v-if="Object.keys(u.breakdown).length === 0" class="no-data">
+                Henüz çalışılan kart yok.
+              </div>
+              <div v-else>
+                <div v-for="(cats, lessonName) in u.breakdown" :key="lessonName" class="lesson-breakdown">
+                  <h5>{{ lessonName }}</h5>
+                  <ul>
+                    <li v-for="(count, catName) in cats" :key="catName">
+                      <span>{{ catName }}:</span>
+                      <strong>{{ count }}</strong>
+                    </li>
+                  </ul>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <button class="btn-secondary full-width" @click="showReportModal = false">Kapat</button>
+      </div>
+    </div>
 
     <main class="main-content">
       <transition name="fade" mode="out-in">
@@ -897,19 +1025,140 @@ const downloadPDF = async (categoryName = null) => {
   display: inline-block;
 }
 
+.logout-icon {
+  display: inline-block;
+}
+
+.auth-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.user-email {
+  font-size: 0.95rem;
+  color: rgba(255,255,255,0.9);
+  font-weight: 500;
+}
+
 .btn-logout {
-  background: rgba(239, 68, 68, 0.2);
-  color: #f87171;
-  border: 1px solid rgba(239, 68, 68, 0.3);
-  padding: 0.5rem 1rem;
-  border-radius: 8px;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.6);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  padding: 0.3rem 0.6rem;
+  border-radius: 6px;
   cursor: pointer;
-  font-size: 0.9rem;
+  font-size: 0.8rem;
   transition: all 0.3s ease;
 }
 
 .btn-logout:hover {
-  background: rgba(239, 68, 68, 0.4);
+  background: rgba(239, 68, 68, 0.1);
+  color: #f87171;
+  border-color: #f87171;
+}
+.btn-report {
+  background: rgba(255, 255, 255, 0.1);
   color: white;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  padding: 0.3rem 0.6rem;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.8rem;
+  margin-right: 5px;
+}
+
+.report-modal {
+  width: 90%;
+  max-width: 500px;
+  max-height: 80vh;
+  overflow-y: auto;
+  text-align: left;
+}
+
+.report-list {
+  margin: 1.5rem 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.report-card {
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.report-header {
+  padding: 1rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.report-header:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.user-main-info {
+  display: flex;
+  flex-direction: column;
+}
+
+.u-name {
+  font-weight: bold;
+  font-size: 1rem;
+}
+
+.badge {
+  font-size: 0.8rem;
+  padding: 2px 6px;
+  border-radius: 4px;
+  margin-top: 4px;
+  display: inline-block;
+  width: fit-content;
+}
+
+.bg-green { background: #10b981; color: white; }
+.bg-gray { background: #6b7280; color: white; }
+
+.report-details {
+  padding: 1rem;
+  background: rgba(0, 0, 0, 0.2);
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.lesson-breakdown {
+  margin-bottom: 1rem;
+}
+
+.lesson-breakdown h5 {
+  color: #a5b4fc;
+  margin-bottom: 0.5rem;
+  border-bottom: 1px solid rgba(255,255,255,0.1);
+  padding-bottom: 2px;
+  font-size: 0.95rem;
+}
+
+.lesson-breakdown ul {
+  list-style: none;
+  padding: 0;
+}
+
+.lesson-breakdown li {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.9rem;
+  margin-bottom: 0.2rem;
+  color: rgba(255, 255, 255, 0.8);
+}
+
+.no-data {
+  text-align: center;
+  color: rgba(255, 255, 255, 0.5);
+  font-style: italic;
+  padding: 1rem;
 }
 </style>
