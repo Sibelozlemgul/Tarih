@@ -3,12 +3,12 @@ import { getFirestore } from "firebase/firestore";
 import { getAuth } from "firebase/auth";
 
 const firebaseConfig = {
-  apiKey: "AIzaSyB8zbUoPtBn9bqUyiCxV6YdAEJLc4izBms",
-  authDomain: "bilgikartlari-b3672.firebaseapp.com",
-  projectId: "bilgikartlari-b3672",
-  storageBucket: "bilgikartlari-b3672.firebasestorage.app",
-  messagingSenderId: "210868376536",
-  appId: "1:210868376536:web:b7660ba023cf61c78b58ad"
+  apiKey: "AIzaSyDzbCnZUxQLp1pqzUWzNoh7Z6vg19eU7dM",
+  authDomain: "sibelozlemgul-96f37.firebaseapp.com",
+  projectId: "sibelozlemgul-96f37",
+  storageBucket: "sibelozlemgul-96f37.firebasestorage.app",
+  messagingSenderId: "419605878008",
+  appId: "1:419605878008:web:48877d931082754457d70d"
 };
 
 const app = initializeApp(firebaseConfig);

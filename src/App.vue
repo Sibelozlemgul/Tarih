@@ -38,7 +38,8 @@ const expandedUser = ref(null) // ID of user to show details for
 const lessons = [
   { id: 'Tarih', emoji: '📜', colors: ['rgba(245, 158, 11, 0.2)', 'rgba(234, 88, 12, 0.2)'] },
   { id: 'Coğrafya', emoji: '🌍', colors: ['rgba(16, 185, 129, 0.2)', 'rgba(13, 148, 136, 0.2)'] },
-  { id: 'Vatandaşlık', emoji: '⚖️', colors: ['rgba(59, 130, 246, 0.2)', 'rgba(79, 70, 229, 0.2)'] }
+  { id: 'Vatandaşlık', emoji: '⚖️', colors: ['rgba(59, 130, 246, 0.2)', 'rgba(79, 70, 229, 0.2)'] },
+  { id: 'Güncel Bilgiler', emoji: '📰', colors: ['rgba(236, 72, 153, 0.2)', 'rgba(168, 85, 247, 0.2)'] }
 ]
 
 // Computed: Merges Master Data + User Progress
@@ -317,7 +318,7 @@ const updateCard = async (card) => {
 }
 
 const forceRefreshData = async () => {
-  if (!isAdmin.value) return
+  // Removed admin check to allow debug for all users
   try {
     const q = query(collection(db, 'flashcards'), orderBy('timestamp', 'desc'))
     const snapshot = await getDocsFromServer(q)
@@ -561,14 +562,11 @@ const downloadPDF = async (categoryName = null) => {
       <p class="auth-toggle" @click="isRegisterMode = !isRegisterMode">
         {{ isRegisterMode ? 'Zaten hesabın var mı? Giriş Yap' : 'Hesabın yok mu? Kaydol' }}
       </p>
-      <div style="font-size: 10px; opacity: 0.3; margin-top: 20px;">
-        Versiyon: 1.0.8 | Giriş: {{ user ? user.email : 'Yok' }}
-      </div>
     </div>
   </div>
 
   <!-- 3. MAIN APP (If check is done and user exists) -->
-  <div v-else class="app-container">
+  <div v-else class="app-container" translate="no">
     <nav class="nav-bar glassy">
       <div class="logo">
         <span v-if="selectedLesson" class="back-arrow" @click="goHome">←</span>
@@ -576,7 +574,6 @@ const downloadPDF = async (categoryName = null) => {
       </div>
       <div class="auth-controls">
         <span class="user-email">{{ user.displayName || cachedName || user.email }}</span>
-        <button v-if="isAdmin" @click="forceRefreshData" class="btn-sm" style="background: #fbbf24; color: #000; border: none; font-size: 10px; padding: 2px 5px; margin-right: 5px;">YENİLE</button>
         <button @click="toggleReportModal" class="btn-sm btn-report">Kullanıcılar</button>
         <button @click="handleLogout" class="btn-sm btn-logout">Çıkış</button>
       </div>
@@ -761,7 +758,6 @@ const downloadPDF = async (categoryName = null) => {
           <div class="study-header">
             <div style="text-align: left;">
               <h3 style="margin-bottom: 0;">{{ selectedCategory || 'Tüm Konular' }}</h3>
-              <span style="font-size: 10px; opacity: 0.3;">v1.0.6</span>
             </div>
             <button class="close-btn" @click="mode = 'dashboard'">✕ Çık</button>
           </div>

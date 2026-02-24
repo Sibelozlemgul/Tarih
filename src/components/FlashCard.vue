@@ -13,7 +13,7 @@ defineProps({
 
 <template>
   <div class="flashcard-container">
-    <div class="flashcard" :class="{ flipped: isFlipped }">
+    <div class="flashcard" :class="{ flipped: isFlipped }" translate="no">
       <div class="front glassy">
         <div class="content">
           <span class="label">SORU</span>
@@ -24,7 +24,6 @@ defineProps({
         <div class="content">
           <span class="label">CEVAP</span>
           <p>{{ card.answer }}</p>
-          <span v-if="card.id" style="font-size: 9px; opacity: 0.2; position: absolute; bottom: 10px;">ID: {{ card.id.substring(0,6) }}</span>
         </div>
       </div>
     </div>
@@ -61,11 +60,10 @@ defineProps({
   -webkit-backface-visibility: hidden;
   backface-visibility: hidden;
   border-radius: 20px;
-  padding: 1rem;
+  padding: 0; /* Let .content handle padding */
   box-sizing: border-box;
   overflow-y: auto;
-  display: flex;
-  flex-direction: column;
+  display: block; /* Standard block flow is the safest */
 }
 
 /* Custom scrollbar */
@@ -79,34 +77,33 @@ defineProps({
 
 .back {
   transform: rotateY(180deg);
-  background: rgba(0, 0, 0, 0.9);
+  background: rgba(0, 0, 0, 0.95);
 }
 
 .content {
-  margin: auto 0; /* Centering that supports overflow without clipping the top */
   width: 100%;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 1.5rem;
-  padding: 1.5rem 0;
-  min-height: min-content;
+  box-sizing: border-box;
+  padding: 4rem 1.5rem; /* Padding for manual centering */
+  text-align: center;
 }
 
 .label {
+  display: block;
   font-size: 0.8rem;
   font-weight: 800;
   letter-spacing: 3px;
-  opacity: 0.6;
+  opacity: 0.5;
   color: var(--primary-light);
   text-transform: uppercase;
+  margin-bottom: 1.5rem;
 }
 
 p {
-  font-size: 1.6rem;
+  font-size: 1.5rem;
   font-weight: 500;
-  line-height: 1.5;
+  line-height: 1.6;
   margin: 0;
+  padding: 0;
   width: 100%;
   word-wrap: break-word;
   white-space: normal;
@@ -115,18 +112,18 @@ p {
 
 @media (max-width: 480px) {
   .flashcard-container {
-    height: 520px; /* Even taller */
+    height: 520px;
     max-width: none;
-    width: 94vw; /* Even wider */
+    width: 92vw;
   }
   
+  .content {
+    padding: 3rem 1rem;
+  }
+
   p {
-    font-size: 1.25rem; /* Larger font back on mobile since we have room */
-    line-height: 1.4;
-  }
-  
-  .front, .back {
-    padding: 1rem 0.75rem;
+    font-size: 1.2rem;
+    line-height: 1.5;
   }
 }
 </style>

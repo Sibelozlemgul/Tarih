@@ -19,7 +19,7 @@ const answer = ref(props.editingCard?.answer || '')
 const category = ref(props.editingCard?.category || '')
 const lesson = ref(props.editingCard?.lesson || props.initialLesson || '')
 
-const lessons = ['Tarih', 'Coğrafya', 'Vatandaşlık']
+const lessons = ['Tarih', 'Coğrafya', 'Vatandaşlık', 'Güncel Bilgiler']
 
 const submitCard = () => {
   if (!question.value || !answer.value || !lesson.value) {
